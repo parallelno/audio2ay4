@@ -17,8 +17,6 @@ import torch.nn.functional as F
 
 from ..models.policy.spec import (
     ENV_RATE_FLOOR_HZ,
-    PITCH_CENTER,
-    PITCH_SPAN,
     VOL_CEIL_DB,
     VOL_FLOOR_DB,
 )
@@ -64,8 +62,7 @@ def warmstart_loss(
     tone_t = targets["tone"]
     audible = torch.maximum(tone_t, targets["noise"])    # voice contributes sound
 
-    # Continuous heads decoded exactly as at inference.
-    dpitch = PITCH_CENTER + PITCH_SPAN * torch.tanh(heads["pitch"])
+    # Continuous heads decoded exactly as at inference; pitch is a per-voice classification.
     dvol = VOL_FLOOR_DB + (VOL_CEIL_DB - VOL_FLOOR_DB) * torch.sigmoid(heads["volume"])
     drate = ENV_RATE_FLOOR_HZ + F.softplus(heads["env_rate"].squeeze(1))
     np_pred = torch.sigmoid(heads["noise_pitch"].squeeze(1))
@@ -74,8 +71,13 @@ def warmstart_loss(
     vol_mask = audible * (1.0 - targets["env_use"]) * pad1
     env_active = targets["env_retrig"] * pad_mask        # (B, T)
 
+    # Cross-entropy over pitch bins: logits (B, V, K, T) → (B, K, V, T) for ``cross_entropy``.
+    pitch_ce = F.cross_entropy(
+        heads["pitch_logits"].permute(0, 2, 1, 3), targets["pitch_bin"], reduction="none"
+    )                                                    # (B, V, T)
+
     parts: dict[str, torch.Tensor] = {
-        "pitch": _masked_mse(dpitch, targets["pitch"], pitch_mask),
+        "pitch": (pitch_mask * pitch_ce).sum() / pitch_mask.sum().clamp(min=1.0),
         "volume": _masked_mse(dvol, targets["volume"], vol_mask),
         "tone": _masked_bce(heads["tone_logit"], tone_t, pad1.expand_as(tone_t)),
         "noise": _masked_bce(heads["noise_logit"], targets["noise"], pad1.expand_as(tone_t)),

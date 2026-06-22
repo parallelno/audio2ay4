@@ -96,10 +96,12 @@ audio2ay4 train rl --corpus corpus/ym --out checkpoints/warmstart_rl.pt
 > whole songs, so each step is fast and uniform; set `--window 0` to train on full songs (slower).
 
 > **Reading the loss.** The per-step `loss=` is a noisy single mini-batch; watch `avg=` (EMA) and
-> the periodic `|| val=` (held-out tunes) for the real trend. `pitch`/`volume` are MSE in
-> semitones² / dB² — e.g. `pitch=250` means ~16 semitones RMS error, so you want these *well* below
-> ~50 before the checkpoint is useful. If `avg`/`val` flatten early and high, the model has only
-> learned per-head means — train longer and/or raise `--lr`.
+> the periodic `|| val=` (held-out tunes) for the real trend. `pitch` is now a **cross-entropy**
+> over 1-semitone bins (random ≈ ln(61) ≈ 4.1; lower is better, <1 is good) rather than a regression,
+> so it no longer dominates the total. `volume` is still MSE in dB² (e.g. `volume=250` ≈ 16 dB RMS
+> error) — you want it *well* below ~50. If `avg`/`val` flatten early and high, the model has only
+> learned per-head means — train longer and/or raise `--lr`. If `pitch` falls but `volume` stays
+> stuck, the same classification treatment can be applied to volume next.
 
 > **This is a real training job, not a smoke test.** The default `--max-steps 2000` is ~0.7 of one
 > epoch over the corpus and will only learn the output means. For a usable warm-start train much

@@ -16,3 +16,23 @@ PITCH_SPAN = 30.0         # ±30 semitones ⇒ ~C1½..F#6
 VOL_FLOOR_DB = -60.0
 VOL_CEIL_DB = 0.0
 ENV_RATE_FLOOR_HZ = 0.1
+
+# Pitch is predicted as a classification over a uniform semitone grid (not regressed): a raw MSE
+# pitch head collapses to the corpus mean, so we quantise [PITCH_MIN, PITCH_MAX] into N_PITCH_BINS
+# integer-semitone bins and learn a softmax over them. Decode picks the arg-max bin centre.
+PITCH_MIN = PITCH_CENTER - PITCH_SPAN          # 30.0 semitones (~C1½)
+PITCH_MAX = PITCH_CENTER + PITCH_SPAN          # 90.0 semitones (~F#6)
+N_PITCH_BINS = 61                              # 1-semitone resolution over the 60-semitone span
+PITCH_BIN_WIDTH = (PITCH_MAX - PITCH_MIN) / (N_PITCH_BINS - 1)  # semitones per bin
+
+
+def pitch_to_bin(semitones: float) -> int:
+    """Quantise a pitch (semitones) to its nearest classification bin index in ``[0, N_PITCH_BINS)``."""
+    frac = (semitones - PITCH_MIN) / (PITCH_MAX - PITCH_MIN)
+    b = round(frac * (N_PITCH_BINS - 1))
+    return int(min(max(b, 0), N_PITCH_BINS - 1))
+
+
+def bin_to_pitch(b: int) -> float:
+    """Inverse of :func:`pitch_to_bin`: bin index → semitones (bin centre)."""
+    return PITCH_MIN + b * PITCH_BIN_WIDTH

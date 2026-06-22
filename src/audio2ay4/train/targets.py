@@ -16,22 +16,20 @@ from ..models.policy.spec import (
     ENV_RATE_FLOOR_HZ,
     N_VOICES,
     PITCH_CENTER,
-    PITCH_SPAN,
     VOL_CEIL_DB,
     VOL_FLOOR_DB,
+    pitch_to_bin,
 )
 from ..repr import parse_song
 from ..repr.state import YmSong
-
-_PITCH_MIN = PITCH_CENTER - PITCH_SPAN
-_PITCH_MAX = PITCH_CENTER + PITCH_SPAN
 
 
 def build_targets(regs: np.ndarray, master_clock_hz: int, frame_rate_hz: int) -> dict[str, np.ndarray]:
     """Pack ground-truth ``regs`` (T, 16) into per-head target arrays.
 
     Returns a dict (T = n_frames):
-      ``pitch`` (3, T) f32, ``volume`` (3, T) f32, ``tone`` / ``noise`` / ``env_use`` (3, T) f32{0,1},
+      ``pitch_bin`` (3, T) int64 (semitone bin index), ``volume`` (3, T) f32,
+      ``tone`` / ``noise`` / ``env_use`` (3, T) f32{0,1},
       ``noise_pitch`` (T,) f32, ``env_rate`` (T,) f32 (Hz), ``env_shape`` (T,) int64,
       ``env_retrig`` (T,) f32{0,1}.
     Masks are derived by the loss from the gate targets.
@@ -39,7 +37,7 @@ def build_targets(regs: np.ndarray, master_clock_hz: int, frame_rate_hz: int) ->
     state = parse_song(YmSong(regs=np.asarray(regs, np.uint8),
                               master_clock_hz=master_clock_hz, frame_rate_hz=frame_rate_hz))
     t_len = len(state)
-    pitch = np.zeros((N_VOICES, t_len), np.float32)
+    pitch = np.full((N_VOICES, t_len), pitch_to_bin(PITCH_CENTER), np.int64)
     volume = np.full((N_VOICES, t_len), VOL_FLOOR_DB, np.float32)
     tone = np.zeros((N_VOICES, t_len), np.float32)
     noise = np.zeros((N_VOICES, t_len), np.float32)
@@ -55,7 +53,7 @@ def build_targets(regs: np.ndarray, master_clock_hz: int, frame_rate_hz: int) ->
             noise[c, t] = 1.0 if v.noise_on else 0.0
             env_use[c, t] = 1.0 if v.use_envelope else 0.0
             if math.isfinite(v.pitch_semitones):
-                pitch[c, t] = float(np.clip(v.pitch_semitones, _PITCH_MIN, _PITCH_MAX))
+                pitch[c, t] = pitch_to_bin(v.pitch_semitones)
             if math.isfinite(v.volume_db):
                 volume[c, t] = float(np.clip(v.volume_db, VOL_FLOOR_DB, VOL_CEIL_DB))
         g = frame.glob
@@ -65,7 +63,7 @@ def build_targets(regs: np.ndarray, master_clock_hz: int, frame_rate_hz: int) ->
         env_retrig[t] = 1.0 if g.env_retrigger else 0.0
 
     return {
-        "pitch": pitch, "volume": volume, "tone": tone, "noise": noise, "env_use": env_use,
+        "pitch_bin": pitch, "volume": volume, "tone": tone, "noise": noise, "env_use": env_use,
         "noise_pitch": noise_pitch, "env_rate": env_rate, "env_shape": env_shape,
         "env_retrig": env_retrig,
     }

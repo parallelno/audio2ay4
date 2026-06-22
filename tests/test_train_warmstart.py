@@ -38,7 +38,9 @@ def test_build_targets_shapes():
     rng = np.random.default_rng(1)
     regs = rng.integers(0, 256, size=(20, 16), dtype=np.uint8)
     t = build_targets(regs, DEFAULT_MASTER_CLOCK_HZ, 50)
-    assert t["pitch"].shape == (3, 20)
+    assert t["pitch_bin"].shape == (3, 20)
+    assert t["pitch_bin"].dtype == np.int64
+    assert 0 <= t["pitch_bin"].min() and t["pitch_bin"].max() < 61
     assert t["env_shape"].shape == (20,)
     assert t["env_shape"].dtype == np.int64
     assert 0 <= t["env_shape"].min() and t["env_shape"].max() < 16
@@ -50,7 +52,8 @@ def test_collate_pads_variable_lengths():
     x, targets, pad = collate(samples)
     assert x.shape == (2, 32, 18)
     assert pad[0].sum().item() == 12 and pad[1].sum().item() == 18
-    assert targets["pitch"].shape == (2, 3, 18)
+    assert targets["pitch_bin"].shape == (2, 3, 18)
+    assert targets["pitch_bin"].dtype == torch.int64
     assert targets["env_shape"].shape == (2, 18)
 
 
@@ -59,7 +62,7 @@ def test_crop_windows_long_and_keeps_short():
     long = pair_to_sample(_synthetic_pair(40, seed=1))
     feats, targets = _crop(long, 16, rng)
     assert feats.shape == (16, 32)
-    assert targets["pitch"].shape == (3, 16)
+    assert targets["pitch_bin"].shape == (3, 16)
     assert targets["env_shape"].shape == (16,)
     short = pair_to_sample(_synthetic_pair(10, seed=2))
     assert _crop(short, 16, rng) is short  # shorter than window → unchanged

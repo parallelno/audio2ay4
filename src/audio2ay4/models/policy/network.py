@@ -18,7 +18,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from .spec import N_ENV_SHAPES, N_VOICES
+from .spec import N_ENV_SHAPES, N_PITCH_BINS, N_VOICES
 
 
 class _ResidualBlock(nn.Module):
@@ -44,7 +44,7 @@ class ReversePlayer(nn.Module):
     """features ``(B, in_dim, T)`` → dict of per-frame head tensors (all length ``T``).
 
     Heads (each a 1×1 conv over the temporal embedding):
-      * ``pitch``         (B, 3, T)   continuous, per voice
+      * ``pitch_logits``  (B, 3, K, T) categorical over K semitone bins, per voice
       * ``volume``        (B, 3, T)   continuous, per voice
       * ``tone_logit``    (B, 3, T)   Bernoulli gate, per voice
       * ``noise_logit``   (B, 3, T)   Bernoulli gate, per voice
@@ -69,7 +69,7 @@ class ReversePlayer(nn.Module):
             _ResidualBlock(hidden, dilation=d, kernel_size=kernel_size) for d in dilations
         )
         # Per-frame heads.
-        self.head_pitch = nn.Conv1d(hidden, N_VOICES, 1)
+        self.head_pitch = nn.Conv1d(hidden, N_VOICES * N_PITCH_BINS, 1)
         self.head_volume = nn.Conv1d(hidden, N_VOICES, 1)
         self.head_tone = nn.Conv1d(hidden, N_VOICES, 1)
         self.head_noise = nn.Conv1d(hidden, N_VOICES, 1)
@@ -87,8 +87,10 @@ class ReversePlayer(nn.Module):
         h = self.in_proj(x)
         for block in self.blocks:
             h = block(h)
+        pitch = self.head_pitch(h)                                          # (B, V*K, T)
+        pitch_logits = pitch.view(pitch.shape[0], N_VOICES, N_PITCH_BINS, pitch.shape[-1])
         return {
-            "pitch": self.head_pitch(h),
+            "pitch_logits": pitch_logits,
             "volume": self.head_volume(h),
             "tone_logit": self.head_tone(h),
             "noise_logit": self.head_noise(h),
