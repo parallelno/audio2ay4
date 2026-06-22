@@ -16,15 +16,12 @@ env/
 .ruff_cache/
 .mypy_cache/
 
-# Local artifacts / generated audio + register dumps
-*.ym
-*.wav
-*.mp3
+# Committed datasets (tracked so the training machine has them): corpus/, samples/, tools/.
+# Ignore only transient junk that lands inside them:
+corpus/**/*.part
+corpus/**/_failures.log
+**/_scanprobe.log
 
-# Downloaded corpus + caches (keep the folder + its README, ignore bulk data)
-/corpus/**
-!/corpus/
-!/corpus/README.md
-!/corpus/.gitkeep
+# Local caches
 /.cache/
 .cache/

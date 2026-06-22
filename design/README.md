@@ -214,7 +214,8 @@ register values; it owns every legality clamp and the shared-resource arbitratio
 
 ### 5.4 data/ — corpus & pairing (shared training infrastructure)
 - Ingest the public YM corpus (Modland YM, zxart/zxtunes, VTX/PSG archives), dedup, filter to
-  AY-3-8910/YM2149, normalize clock/frame-rate.
+  AY-3-8910/YM2149, normalize clock/frame-rate. Bulk-fetch the Modland YM set with
+  `scripts/download_modland_ym.py` (see `corpus/README.md` for sources and usage).
 - **Render YM → audio** with the emulator to produce `(audio, AYState/registers)` **pairs** — the
   free, unlimited supervised signal both plans build on.
 - Augmentation: clock/tempo jitter, gain, light reverb/codec degradation on the audio side to

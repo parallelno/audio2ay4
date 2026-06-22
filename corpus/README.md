@@ -26,12 +26,26 @@ Other AY formats (`.ay`, `.vtx`, `.psg`, `.pt3`, `.vgm`) must be converted to `.
 
 ### Bulk-fetch Modland YM (native `.ym`, recommended start)
 
+Use the bundled downloader [`scripts/download_modland_ym.py`](../scripts/download_modland_ym.py)
+(stdlib-only, no extra dependencies). It reads the path manifest
+[`scripts/modland_ym.txt`](../scripts/modland_ym.txt) — 4961 entries of the form
+`YM/<author>/<tune>.ym` — and fetches each from `https://modland.com/pub/modules/` into
+`corpus/ym/<author>/<tune>.ym` (the leading `YM/` is stripped).
+
 ```powershell
-# requires wget (e.g. `winget install wget` or Git-for-Windows' wget)
-wget -r -np -nH --cut-dirs=3 -A ".ym" https://modland.com/pub/modules/YM/ -P corpus/ym
+# full corpus (~17 MB, 4961 files); re-run anytime — existing files are skipped (resume)
+.\.venv\Scripts\python.exe scripts\download_modland_ym.py --workers 8
+
+# smoke-test a handful first
+.\.venv\Scripts\python.exe scripts\download_modland_ym.py --limit 5
 ```
 
-Start with a single author folder to sanity-check before mirroring the whole tree.
+Features: concurrent workers, resume (skips already-downloaded files), atomic `.part` writes,
+retry-with-backoff, and a `corpus/ym/_failures.log` listing any files that failed (re-run to retry).
+Flags: `--list` (manifest path), `--out` (default `corpus/ym`), `--workers`, `--timeout`,
+`--retries`, `--limit`.
+
+> Alternative (needs `wget`): `wget -r -np -nH --cut-dirs=3 -A ".ym" https://modland.com/pub/modules/YM/ -P corpus/ym`
 
 
 ## Notes
