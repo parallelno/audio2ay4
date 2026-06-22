@@ -32,11 +32,19 @@ def get_core(name: str, cfg: RunConfig) -> LearnedCore:
     """Instantiate a registered core by name, importing built-ins on first use."""
     if not _REGISTRY:
         _bootstrap()
-    if name not in _REGISTRY:
-        if name in ("rl", "diffusion"):
+    if name == "rl" and name not in _REGISTRY:
+        try:
+            from . import policy  # noqa: F401  (registers 'rl' on import)
+        except ImportError as exc:
             raise NotImplementedError(
-                f"Core '{name}' is not implemented yet. See the design plan "
-                f"(design/plan-{'a-reinforcement-learning' if name == 'rl' else 'b-diffusion'}.md)."
+                "The 'rl' core requires the neural extra (torch). "
+                'Install it with: pip install -e ".[neural]".'
+            ) from exc
+    if name not in _REGISTRY:
+        if name == "diffusion":
+            raise NotImplementedError(
+                "Core 'diffusion' is not implemented yet. See the design plan "
+                "(design/plan-b-diffusion.md)."
             )
         raise KeyError(f"Unknown core '{name}'. Available: {sorted(_REGISTRY)}")
     return _REGISTRY[name](cfg)
