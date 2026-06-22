@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audio2ay4"
+version = "0.0.1"
+description = "Convert audio (mp3/wav/flac/ogg) into AY-3-8910 / YM2149 register streams (.ym), with audio preview. Learned core (RL or diffusion) over a deterministic, hardware-legal foundation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "parallelno" }]
+dependencies = [
+    "numpy>=1.26",
+]
+
+# Heavy / optional stacks are extras so the deterministic core stays light and importable.
+[project.optional-dependencies]
+audio = ["soundfile>=0.12"]          # decode/encode non-wav containers
+neural = ["torch>=2.2", "torchaudio>=2.2"]  # learned cores (Plan A / Plan B)
+# Proven AY-3-8910 emulator + YM I/O, reused as-is from audio2ay3 (not reinvented).
+# Install from git, or locally with `pip install -e ../audio2ay3` against a checkout.
+ay3 = ["audio2ay3 @ git+https://github.com/parallelno/audio2ay3"]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.urls]
+"audio2ay3 (reference impl. being ported)" = "https://github.com/parallelno/audio2ay3"
+"Homepage" = "https://github.com/parallelno/audio2ay4"
+
+[project.scripts]
+audio2ay4 = "audio2ay4.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

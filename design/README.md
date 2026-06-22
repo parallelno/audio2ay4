@@ -13,9 +13,15 @@ here) and differ only in the learned core:
 | **A — Reinforcement Learning** | Train a *reverse player* `audio → registers`; reward = "when I re-render my registers, do they **sound like** the input?" Optional supervised warm-start. | [plan-a-reinforcement-learning.md](plan-a-reinforcement-learning.md) |
 | **B — Diffusion** | Conditional diffusion that denoises an AY control-stream conditioned on time-aligned audio features; optional emulator guidance for faithfulness. | [plan-b-diffusion.md](plan-b-diffusion.md) |
 
-Both plans **reuse the validated chip core and YM I/O proven in `audio2ay3`** (the emulator is the
+Both plans **reuse the validated chip core and YM I/O proven in audio2ay3** (the emulator is the
 ground truth for training, evaluation, and preview) and both emit registers through the **same
 deterministic legality layer**, so output is always playable on real hardware.
+
+> **Provenance.** audio2ay4 builds on **[audio2ay3](https://github.com/parallelno/audio2ay3)** — a
+> mature, modular, well-organized Python project with a **proven AY-3-8910 / YM2149 emulator** and
+> complete YM I/O. We **reuse that emulator, YM read/write, and legal-register encoder as-is** (the
+> trusted ground truth for training, evaluation, and preview) rather than reinventing them. See the
+> audio2ay3 repo's `src/` and `design/` for the reference implementation being ported.
 
 ---
 
@@ -183,9 +189,10 @@ register values; it owns every legality clamp and the shared-resource arbitratio
 
 ## 5. Shared subsystems
 
-### 5.1 chip/ — emulator + YM I/O (port the proven `audio2ay3` core)
-- **Emulator:** cycle/῝frame-accurate AY → PCM. Ground truth for data gen, eval, preview. Frozen
-  and golden-file tested against reference YM renders.
+### 5.1 chip/ — emulator + YM I/O (port the proven [audio2ay3](https://github.com/parallelno/audio2ay3) core)
+- **Emulator:** cycle/frame-accurate AY → PCM. Ground truth for data gen, eval, preview. Frozen
+  and golden-file tested against reference YM renders. Ported from
+  [audio2ay3](https://github.com/parallelno/audio2ay3) (already validated against ST-Sound / MAME).
 - **YM reader/writer:** YM2/3/3b/5/6 + transparent LHA depack; round-trip tested.
 - **Legality oracle:** `is_legal(RegisterStream) -> bool` used as a hard test gate everywhere.
 
