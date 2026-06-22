@@ -19,14 +19,15 @@ import numpy as np
 from ...config import RunConfig
 from ...repr.state import AYGlobalFrame, AYState, AYStateFrame, AYVoiceFrame, FeatureFrames
 from ..base import register_core
-from .network import N_VOICES, ReversePlayer
-
-# Decode ranges — bound raw heads to sane musical values (the compiler still clamps to hardware).
-_PITCH_CENTER = 60.0      # MIDI C4
-_PITCH_SPAN = 30.0        # ±30 semitones ⇒ ~C1½..F#6
-_VOL_FLOOR_DB = -60.0
-_VOL_CEIL_DB = 0.0
-_ENV_RATE_FLOOR_HZ = 0.1
+from .network import ReversePlayer
+from .spec import (
+    ENV_RATE_FLOOR_HZ,
+    N_VOICES,
+    PITCH_CENTER,
+    PITCH_SPAN,
+    VOL_CEIL_DB,
+    VOL_FLOOR_DB,
+)
 
 _SILENT = AYVoiceFrame(pitch_semitones=float("nan"), volume_db=float("-inf"), tone_on=False)
 
@@ -91,13 +92,13 @@ class RLCore:
 
 def _decode(h: dict[str, np.ndarray], n_frames: int) -> AYState:
     """Map raw head arrays → a finite, legal ``AYState`` of length ``n_frames``."""
-    pitch = _PITCH_CENTER + _PITCH_SPAN * np.tanh(h["pitch"])                 # (3, T)
-    volume = _VOL_FLOOR_DB + (_VOL_CEIL_DB - _VOL_FLOOR_DB) * _sigmoid(h["volume"])
+    pitch = PITCH_CENTER + PITCH_SPAN * np.tanh(h["pitch"])                   # (3, T)
+    volume = VOL_FLOOR_DB + (VOL_CEIL_DB - VOL_FLOOR_DB) * _sigmoid(h["volume"])
     tone_on = h["tone_logit"] > 0.0
     noise_on = h["noise_logit"] > 0.0
     env_use = h["env_use_logit"] > 0.0
     noise_pitch = _sigmoid(h["noise_pitch"][0])                              # (T,)
-    env_rate = _ENV_RATE_FLOOR_HZ + _softplus(h["env_rate"][0])
+    env_rate = ENV_RATE_FLOOR_HZ + _softplus(h["env_rate"][0])
     env_shape = np.argmax(h["env_shape"], axis=0).astype(int)                # (T,)
     env_retrig = h["env_retrig"][0] > 0.0
 

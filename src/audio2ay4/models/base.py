@@ -16,6 +16,7 @@ class LearnedCore(Protocol):
 
 
 _REGISTRY: dict[str, Callable[[RunConfig], LearnedCore]] = {}
+_BOOTSTRAPPED = False
 
 
 def register_core(name: str) -> Callable[[Callable[[RunConfig], LearnedCore]], Callable[[RunConfig], LearnedCore]]:
@@ -30,8 +31,7 @@ def register_core(name: str) -> Callable[[Callable[[RunConfig], LearnedCore]], C
 
 def get_core(name: str, cfg: RunConfig) -> LearnedCore:
     """Instantiate a registered core by name, importing built-ins on first use."""
-    if not _REGISTRY:
-        _bootstrap()
+    _bootstrap()
     if name == "rl" and name not in _REGISTRY:
         try:
             from . import policy  # noqa: F401  (registers 'rl' on import)
@@ -51,4 +51,10 @@ def get_core(name: str, cfg: RunConfig) -> LearnedCore:
 
 
 def _bootstrap() -> None:
+    """Register built-in cores once (idempotent; import order independent)."""
+    global _BOOTSTRAPPED
+    if _BOOTSTRAPPED:
+        return
     from . import dummy  # noqa: F401  (registers 'dummy' on import)
+
+    _BOOTSTRAPPED = True

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 
 from .config import DEFAULT_FRAME_RATE_HZ, DEFAULT_MASTER_CLOCK_HZ, RunConfig
 
@@ -84,6 +85,31 @@ def _cmd_stub(name: str, plan: str) -> int:
     return 2
 
 
+def _cmd_train(args: argparse.Namespace) -> int:
+    if args.plan != "rl":
+        return _cmd_stub("train", "plan-b-diffusion.md")
+    from .config import TrainConfig
+    from .data.corpus import find_ym_files
+    from .train.warmstart import train_warmstart
+
+    ym_paths = find_ym_files(args.corpus)
+    if not ym_paths:
+        print(f"No .ym files found under {args.corpus}.", file=sys.stderr)
+        return 1
+    if args.limit > 0:
+        ym_paths = ym_paths[: args.limit]
+
+    run = _cfg(args)
+    run = replace(run, core="rl", extra={**run.extra, **({"checkpoint": args.out} if args.out else {})})
+    train_cfg = TrainConfig(
+        plan="rl", run=run, batch_size=args.batch_size, lr=args.lr,
+        max_steps=args.max_steps, corpus_dir=args.corpus, cache_dir=args.cache_dir,
+    )
+    ckpt = train_warmstart(train_cfg, ym_paths)
+    print(f"Trained on {len(ym_paths)} tunes. Checkpoint: {ckpt}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="audio2ay4", description="Audio → AY (YM) converter & preview.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -104,8 +130,17 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("input")
     v.set_defaults(func=_cmd_validate)
 
-    t = sub.add_parser("train", help="(stub) train a learned core")
-    t.set_defaults(func=lambda _a: _cmd_stub("train", "plan-a-reinforcement-learning.md / plan-b-diffusion.md"))
+    t = sub.add_parser("train", help="train a learned core (Plan A warm-start)")
+    t.add_argument("plan", nargs="?", default="rl", choices=["rl", "diffusion"], help="which plan")
+    t.add_argument("--corpus", default="corpus/ym", help="directory of .ym training tunes")
+    t.add_argument("--out", default="", help="checkpoint output path (default: <cache>/warmstart_rl.pt)")
+    t.add_argument("--cache-dir", default=".cache", help="feature/pair cache directory")
+    t.add_argument("--batch-size", type=int, default=16)
+    t.add_argument("--lr", type=float, default=1e-4)
+    t.add_argument("--max-steps", type=int, default=2000)
+    t.add_argument("--limit", type=int, default=0, help="use only the first N tunes (0 = all)")
+    _add_common(t)
+    t.set_defaults(func=_cmd_train)
 
     e = sub.add_parser("eval", help="convert audio (file or dir) and score fidelity/stability/legality")
     e.add_argument("input", help="audio file or directory of audio files")

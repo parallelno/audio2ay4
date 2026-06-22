@@ -18,10 +18,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-# Per-frame head widths. Three tone voices share the same per-voice layout; the global block
-# models the single shared envelope + single shared noise generator exactly once.
-N_VOICES = 3
-N_ENV_SHAPES = 16
+from .spec import N_ENV_SHAPES, N_VOICES
 
 
 class _ResidualBlock(nn.Module):
