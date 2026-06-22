@@ -88,6 +88,24 @@ def test_warmstart_loss_is_finite():
     }
 
 
+def test_warmstart_loss_invariant_to_voice_relabelling():
+    # The 3 tone channels are interchangeable in the audio, so relabelling the target voices must
+    # not change the (permutation-invariant) loss.
+    torch.manual_seed(0)
+    x, targets, pad = collate(
+        [pair_to_sample(_synthetic_pair(24, seed=11)), pair_to_sample(_synthetic_pair(20, seed=12))]
+    )
+    net = ReversePlayer(in_dim=32, hidden=16).eval()
+    with torch.no_grad():
+        heads = net(x)
+        base, _ = warmstart_loss(heads, targets, pad)
+        rolled = dict(targets)
+        for k in ("pitch_bin", "volume", "tone", "noise", "env_use"):
+            rolled[k] = torch.roll(targets[k], shifts=1, dims=1)  # relabel A→B→C→A
+        permuted, _ = warmstart_loss(heads, rolled, pad)
+    assert permuted.item() == pytest.approx(base.item(), rel=1e-5, abs=1e-4)
+
+
 def test_overfit_one_batch_reduces_loss():
     torch.manual_seed(0)
     batch = collate([pair_to_sample(_synthetic_pair(16, seed=7))])

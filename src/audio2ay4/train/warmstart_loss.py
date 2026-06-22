@@ -6,10 +6,16 @@ inference agree), then compared in natural units (semitones, dB, log-Hz, probabi
 use BCE-with-logits; ``env_shape`` uses cross-entropy. Every term is masked: pitch only where the
 tone is on, volume only where a voice is audible and not envelope-controlled, and the envelope
 rate/shape only on frames that (re)write R13.
+
+The three AY tone channels render to identical timbres, so the corpus's A/B/C voice ordering is not
+recoverable from the mixed audio. The per-voice heads are therefore scored **permutation-invariantly**
+(utterance-level PIT): per tune we pick the predicted→target voice assignment with the lowest cost
+before reducing, so an audio-equivalent relabelling is never penalised.
 """
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 
 import torch
@@ -17,6 +23,7 @@ import torch.nn.functional as F
 
 from ..models.policy.spec import (
     ENV_RATE_FLOOR_HZ,
+    N_VOICES,
     VOL_CEIL_DB,
     VOL_FLOOR_DB,
 )
@@ -50,6 +57,60 @@ def _masked_ce(logits: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -
     return (mask * ce).sum() / mask.sum().clamp(min=1.0)
 
 
+_PERMS = tuple(itertools.permutations(range(N_VOICES)))  # 6 voice assignments (V = 3)
+
+
+def _best_voice_perm(
+    heads: dict[str, torch.Tensor],
+    targets: dict[str, torch.Tensor],
+    pad_mask: torch.Tensor,
+    w: WarmstartWeights,
+) -> torch.Tensor:
+    """Pick, per tune, the predicted→target voice assignment with the lowest combined cost.
+
+    The three AY tone channels render to identical timbres, so the corpus's arbitrary A/B/C voice
+    ordering is not recoverable from the mixed audio. Forcing it makes per-voice pitch partly
+    unlearnable. We instead score all ``V! = 6`` assignments (pitch CE + volume MSE + gate BCEs,
+    summed over the sequence) and return the best as a ``(B, V)`` index of target voices.
+    """
+    b, v, k, t = heads["pitch_logits"].shape
+    pad_ij = pad_mask.view(b, 1, 1, t)
+
+    logp = F.log_softmax(heads["pitch_logits"], dim=2)            # (B, Vp, K, T)
+    bins = targets["pitch_bin"]                                   # (B, Vt, T)
+    idx = bins.unsqueeze(1).unsqueeze(3).expand(b, v, v, 1, t)    # (B, Vp, Vt, 1, T)
+    ce = -logp.unsqueeze(2).expand(b, v, v, k, t).gather(3, idx).squeeze(3)  # (B, Vp, Vt, T)
+
+    dvol = VOL_FLOOR_DB + (VOL_CEIL_DB - VOL_FLOOR_DB) * torch.sigmoid(heads["volume"])
+    vol_se = (dvol.unsqueeze(2) - targets["volume"].unsqueeze(1)) ** 2       # (B, Vp, Vt, T)
+
+    def _pair_bce(logit_key: str, tgt_key: str) -> torch.Tensor:
+        lo = heads[logit_key].unsqueeze(2).expand(b, v, v, t)
+        tg = targets[tgt_key].unsqueeze(1).expand(b, v, v, t)
+        return F.binary_cross_entropy_with_logits(lo, tg, reduction="none")
+
+    tone_j = targets["tone"].unsqueeze(1)                                   # (B, 1, Vt, T)
+    audible_j = torch.maximum(targets["tone"], targets["noise"]).unsqueeze(1)
+    pitch_mask = tone_j * pad_ij
+    vol_mask = audible_j * (1.0 - targets["env_use"].unsqueeze(1)) * pad_ij
+
+    cost = (
+        w.pitch * pitch_mask * ce
+        + w.volume * vol_mask * vol_se
+        + pad_ij * (w.tone * _pair_bce("tone_logit", "tone")
+                    + w.noise * _pair_bce("noise_logit", "noise")
+                    + w.env_use * _pair_bce("env_use_logit", "env_use"))
+    )
+    m = cost.sum(dim=3)                                                     # (B, Vp, Vt)
+
+    perms = torch.tensor(_PERMS, device=m.device)                          # (P, V)
+    rows = torch.arange(v, device=m.device)
+    perm_costs = torch.stack(
+        [m[:, rows, perms[p]].sum(dim=1) for p in range(perms.shape[0])], dim=0
+    )                                                                      # (P, B)
+    return perms[perm_costs.argmin(dim=0)]  # (B, V) target voice indices
+
+
 def warmstart_loss(
     heads: dict[str, torch.Tensor],
     targets: dict[str, torch.Tensor],
@@ -58,9 +119,19 @@ def warmstart_loss(
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """Return ``(total_loss, parts)`` where ``parts`` are detached scalars for logging."""
     w = weights or WarmstartWeights()
+
+    # Permutation-invariant voice assignment: relabel target voices to the best match before
+    # scoring, so audio-equivalent channel orderings are not penalised (selection has no grad).
+    with torch.no_grad():
+        perm = _best_voice_perm(heads, targets, pad_mask, w)         # (B, V) target voice indices
+    gather_idx = perm.unsqueeze(-1).expand(-1, -1, pad_mask.shape[1])  # (B, V, T)
+    pt = dict(targets)
+    for key in ("pitch_bin", "volume", "tone", "noise", "env_use"):
+        pt[key] = targets[key].gather(1, gather_idx)
+
     pad1 = pad_mask.unsqueeze(1)                         # (B, 1, T) → broadcast over voices
-    tone_t = targets["tone"]
-    audible = torch.maximum(tone_t, targets["noise"])    # voice contributes sound
+    tone_t = pt["tone"]
+    audible = torch.maximum(tone_t, pt["noise"])         # voice contributes sound
 
     # Continuous heads decoded exactly as at inference; pitch is a per-voice classification.
     dvol = VOL_FLOOR_DB + (VOL_CEIL_DB - VOL_FLOOR_DB) * torch.sigmoid(heads["volume"])
@@ -68,20 +139,20 @@ def warmstart_loss(
     np_pred = torch.sigmoid(heads["noise_pitch"].squeeze(1))
 
     pitch_mask = tone_t * pad1
-    vol_mask = audible * (1.0 - targets["env_use"]) * pad1
-    env_active = targets["env_retrig"] * pad_mask        # (B, T)
+    vol_mask = audible * (1.0 - pt["env_use"]) * pad1
+    env_active = targets["env_retrig"] * pad_mask        # (B, T) — shared head, no permutation
 
     # Cross-entropy over pitch bins: logits (B, V, K, T) → (B, K, V, T) for ``cross_entropy``.
     pitch_ce = F.cross_entropy(
-        heads["pitch_logits"].permute(0, 2, 1, 3), targets["pitch_bin"], reduction="none"
+        heads["pitch_logits"].permute(0, 2, 1, 3), pt["pitch_bin"], reduction="none"
     )                                                    # (B, V, T)
 
     parts: dict[str, torch.Tensor] = {
         "pitch": (pitch_mask * pitch_ce).sum() / pitch_mask.sum().clamp(min=1.0),
-        "volume": _masked_mse(dvol, targets["volume"], vol_mask),
+        "volume": _masked_mse(dvol, pt["volume"], vol_mask),
         "tone": _masked_bce(heads["tone_logit"], tone_t, pad1.expand_as(tone_t)),
-        "noise": _masked_bce(heads["noise_logit"], targets["noise"], pad1.expand_as(tone_t)),
-        "env_use": _masked_bce(heads["env_use_logit"], targets["env_use"], pad1.expand_as(tone_t)),
+        "noise": _masked_bce(heads["noise_logit"], pt["noise"], pad1.expand_as(tone_t)),
+        "env_use": _masked_bce(heads["env_use_logit"], pt["env_use"], pad1.expand_as(tone_t)),
         "noise_pitch": _masked_mse(np_pred, targets["noise_pitch"], pad_mask),
         "env_rate": _masked_mse(torch.log(drate), torch.log(targets["env_rate"]), env_active),
         "env_shape": _masked_ce(heads["env_shape"], targets["env_shape"], env_active),

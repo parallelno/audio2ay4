@@ -102,6 +102,12 @@ audio2ay4 train rl --corpus corpus/ym --out checkpoints/warmstart_rl.pt
 > error) — you want it *well* below ~50. If `avg`/`val` flatten early and high, the model has only
 > learned per-head means — train longer and/or raise `--lr`. If `pitch` falls but `volume` stays
 > stuck, the same classification treatment can be applied to volume next.
+>
+> **Voice permutation (PIT).** The 3 AY tone channels are interchangeable in the rendered audio, so
+> the per-voice heads (pitch/volume/tone/noise/env_use) are scored **permutation-invariantly**: each
+> tune is matched to the best of the 6 voice assignments before reducing. This removes a floor that
+> previously kept `pitch` stuck (~2.8) because the corpus's arbitrary A/B/C ordering isn't
+> recoverable from a mono mix. Expect `pitch` to now fall below ~2.8 if the features carry pitch.
 
 > **This is a real training job, not a smoke test.** The default `--max-steps 2000` is ~0.7 of one
 > epoch over the corpus and will only learn the output means. For a usable warm-start train much
