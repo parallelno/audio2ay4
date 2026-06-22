@@ -106,7 +106,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
         max_steps=args.max_steps, corpus_dir=args.corpus, cache_dir=args.cache_dir,
     )
     ckpt = train_warmstart(train_cfg, ym_paths)
-    print(f"Trained on {len(ym_paths)} tunes. Checkpoint: {ckpt}")
+    print(f"Checkpoint: {ckpt}")
     return 0
 
 

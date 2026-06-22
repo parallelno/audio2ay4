@@ -12,7 +12,7 @@ Reference docs already in the repo: README is minimal; dependency extras are in
 `pyproject.toml`, corpus details in `corpus/README.md`, design in `design/README.md`.
 
 ## 0. Prerequisites
-- Python 3.11+  (`python --version`)
+- Python 3.12+  (`python --version`)
 - git  (the `ay3` extra installs audio2ay3 from GitHub)
 - An NVIDIA GPU + driver if you want CUDA (optional; CPU works, just slower)
 
@@ -25,14 +25,14 @@ cd audio2ay4
 #  bash:       find corpus/ym -name '*.ym' | wc -l
 ```
 
-## 2. Create and activate a virtual environment (Python 3.11)
+## 2. Create and activate a virtual environment (Python 3.12)
 ```powershell
 # Windows PowerShell:
-py -3.11 -m venv .venv ; .\.venv\Scripts\Activate.ps1
+py -3.12 -m venv .venv ; .\.venv\Scripts\Activate.ps1
 ```
 ```bash
 # Linux/macOS:
-python3.11 -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv && source .venv/bin/activate
 ```
 ```bash
 python -m pip install -U pip
