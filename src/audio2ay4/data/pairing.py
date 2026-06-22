@@ -134,3 +134,14 @@ def build_pair(ym_path: str, cfg: RunConfig, cache_dir: str | None = None) -> Tr
     if cache_file:
         _save_cache(cache_file, pair)
     return pair
+
+
+def is_cached(ym_path: str, cfg: RunConfig, cache_dir: str | None) -> bool:
+    """True if a feature/pair cache entry already exists for this YM + feature config.
+
+    Existence check only (no integrity load); a corrupt entry is treated as a hit here but
+    ``build_pair`` will transparently re-render it.
+    """
+    if not cache_dir:
+        return False
+    return os.path.exists(_cache_path(cache_dir, _file_sha1(ym_path), cfg))

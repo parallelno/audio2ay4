@@ -16,7 +16,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 
 from ..config import RunConfig
-from ..data.pairing import TrainingPair, build_pair
+from ..data.pairing import TrainingPair, build_pair, is_cached
 from .targets import build_targets
 
 Sample = tuple[np.ndarray, dict[str, np.ndarray]]
@@ -32,10 +32,11 @@ def pair_to_sample(pair: TrainingPair) -> Sample:
     return feats, targets
 
 
-def _render_one(task: tuple[str, RunConfig, str | None]) -> Sample:
-    """Process-pool worker: render one YM and reduce it to a training sample."""
+def _render_one(task: tuple[str, RunConfig, str | None]) -> tuple[Sample, bool]:
+    """Process-pool worker: render (or load-from-cache) one YM → ``(sample, was_cached)``."""
     path, run, cache_dir = task
-    return pair_to_sample(build_pair(path, run, cache_dir=cache_dir))
+    cached = is_cached(path, run, cache_dir)
+    return pair_to_sample(build_pair(path, run, cache_dir=cache_dir)), cached
 
 
 def resolve_workers(workers: int | None, total: int) -> int:
@@ -60,9 +61,11 @@ def render_samples(
     """
     total = len(ym_paths)
     n_workers = resolve_workers(workers, total)
-    print(f"Rendering {total} YM files (workers={n_workers}) …", flush=True)
+    print(f"Rendering {total} YM files (workers={n_workers}, cache={cache_dir or 'off'}) …",
+          flush=True)
 
     results: dict[int, Sample] = {}
+    cached_n = 0
     t0 = time.monotonic()
     done = 0
 
@@ -72,14 +75,17 @@ def render_samples(
         eta = (total - done) / rate if rate > 0 else 0.0
         print(
             f"  rendered {done}/{total} ({100 * done // total}%) "
-            f"| ok {len(results)} | {rate:.1f} f/s | ETA {eta:.0f}s",
+            f"| ok {len(results)} (cache {cached_n} / new {len(results) - cached_n}) "
+            f"| {rate:.1f} f/s | ETA {eta:.0f}s",
             flush=True,
         )
 
     if n_workers <= 1:
         for i, path in enumerate(ym_paths):
             try:
-                results[i] = _render_one((path, run, cache_dir))
+                sample, was_cached = _render_one((path, run, cache_dir))
+                results[i] = sample
+                cached_n += was_cached
             except Exception as exc:  # noqa: BLE001 — one bad tune must not kill the run
                 print(f"[skip] {path}: {exc}", file=sys.stderr, flush=True)
             done += 1
@@ -92,11 +98,19 @@ def render_samples(
             for fut in as_completed(futures):
                 i = futures[fut]
                 try:
-                    results[i] = fut.result()
+                    sample, was_cached = fut.result()
+                    results[i] = sample
+                    cached_n += was_cached
                 except Exception as exc:  # noqa: BLE001 — skip & log, keep going
                     print(f"[skip] {ym_paths[i]}: {exc}", file=sys.stderr, flush=True)
                 done += 1
                 if done % log_every == 0 or done == total:
                     _tick()
 
+    rendered_n = len(results) - cached_n
+    print(
+        f"Render done: {len(results)} ok ({cached_n} from cache, {rendered_n} freshly rendered), "
+        f"{total - len(results)} skipped.",
+        flush=True,
+    )
     return [results[i] for i in sorted(results)]

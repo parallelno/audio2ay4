@@ -81,6 +81,13 @@ audio2ay4 train rl --corpus corpus/ym --out checkpoints/warmstart_rl.pt
 > is now parallelised across processes — `--workers 0` (default) uses every core. On a 32-core box
 > that turns a ~56-minute serial render into a couple of minutes. Lower `--workers` if you hit a
 > RAM ceiling. Cached renders make later runs fast regardless.
+>
+> The render log now reports cache usage, e.g.
+> `rendered 100/4961 | ok 100 (cache 100 / new 0) | 24.5 f/s` and a final
+> `Render done: 4942 ok (4942 from cache, 0 freshly rendered), 19 skipped.` If `cache` stays 0 on a
+> re-run, the cache isn't being hit (check you run from the repo root so `.cache/` matches). If
+> `cache` climbs but throughput is still modest, the cost is loading + building targets + moving
+> samples back from the workers, not the emulator.
 
 > **Training speed & device.** Training prints a banner like
 > `Training on cuda: 4694 train / 247 val tunes | batch 16 | window 512 | 2000 steps | lr 3.0e-04`
