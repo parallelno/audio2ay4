@@ -10,6 +10,7 @@ be unit-tested on CPU with synthetic batches (the §A.11 "overfit one batch" can
 
 from __future__ import annotations
 
+import math
 import os
 import time
 
@@ -105,6 +106,40 @@ def _crop(sample: Sample, window: int | None, rng: np.random.Generator) -> Sampl
     return feats[s:e], cropped
 
 
+def _lr_at(step: int, base_lr: float, max_steps: int, warmup: int) -> float:
+    """Linear warmup for ``warmup`` steps, then cosine decay to ~0 by ``max_steps``."""
+    if step < warmup:
+        return base_lr * step / max(1, warmup)
+    prog = (step - warmup) / max(1, max_steps - warmup)
+    return 0.5 * base_lr * (1.0 + math.cos(math.pi * min(1.0, prog)))
+
+
+@torch.no_grad()
+def _evaluate(
+    net: ReversePlayer,
+    val_samples: list[Sample],
+    *,
+    window: int | None,
+    bs: int,
+    weights: WarmstartWeights,
+    device: str,
+    seed: int,
+    n_batches: int = 8,
+) -> float:
+    """Mean warm-start loss over a few fixed validation batches (eval mode, no grad)."""
+    net.eval()
+    vrng = np.random.default_rng(seed + 1)
+    losses = []
+    for _ in range(n_batches):
+        k = min(bs, len(val_samples))
+        idx = vrng.choice(len(val_samples), size=k, replace=len(val_samples) < k)
+        x, targets, pad = collate([_crop(val_samples[i], window, vrng) for i in idx], device=device)
+        total, _ = warmstart_loss(net(x), targets, pad, weights)
+        losses.append(float(total))
+    net.train()
+    return float(np.mean(losses)) if losses else float("nan")
+
+
 def train_warmstart(
     train_cfg: TrainConfig,
     ym_paths: list[str],
@@ -112,6 +147,8 @@ def train_warmstart(
     device: str | None = None,
     workers: int | None = None,
     window: int | None = 512,
+    val_frac: float = 0.05,
+    val_every: int = 250,
     log_every: int = 25,
 ) -> str:
     """Render → pair → pretrain the reverse player; save a checkpoint. Returns its path.
@@ -136,27 +173,45 @@ def train_warmstart(
     opt = torch.optim.Adam(net.parameters(), lr=train_cfg.lr)
     weights = WarmstartWeights()
 
-    bs = max(1, min(train_cfg.batch_size, len(samples)))
+    # Hold out whole tunes for an honest convergence signal (per-step train loss is very noisy).
+    n_val = min(int(len(samples) * val_frac) if val_frac > 0 else 0, len(samples) - 1)
+    train_samples = samples[: len(samples) - n_val] if n_val > 0 else samples
+    val_samples = samples[len(samples) - n_val :] if n_val > 0 else []
+
+    bs = max(1, min(train_cfg.batch_size, len(train_samples)))
+    base_lr = train_cfg.lr
+    warmup = max(1, min(500, train_cfg.max_steps // 10))
     print(
-        f"Training on {device}: {len(samples)} tunes | batch {bs} | window {window or 'full'} "
-        f"| {train_cfg.max_steps} steps",
+        f"Training on {device}: {len(train_samples)} train / {len(val_samples)} val tunes "
+        f"| batch {bs} | window {window or 'full'} | {train_cfg.max_steps} steps "
+        f"| lr {base_lr:.1e} (warmup {warmup}, cosine)",
         flush=True,
     )
+
+    ema: float | None = None
     t0 = time.monotonic()
     for step in range(1, train_cfg.max_steps + 1):
-        idx = rng.choice(len(samples), size=bs, replace=len(samples) < bs)
-        batch = collate([_crop(samples[i], window, rng) for i in idx], device=device)
+        lr = _lr_at(step, base_lr, train_cfg.max_steps, warmup)
+        for g in opt.param_groups:
+            g["lr"] = lr
+        idx = rng.choice(len(train_samples), size=bs, replace=len(train_samples) < bs)
+        batch = collate([_crop(train_samples[i], window, rng) for i in idx], device=device)
         total, parts = train_step(net, opt, batch, weights)
+        ema = total if ema is None else 0.98 * ema + 0.02 * total
         if step <= 3 or step % log_every == 0 or step == train_cfg.max_steps:
             elapsed = time.monotonic() - t0
             sps = step / elapsed if elapsed > 0 else 0.0
             eta = (train_cfg.max_steps - step) / sps if sps > 0 else 0.0
-            print(
-                f"step {step:>6}/{train_cfg.max_steps}  loss={total:.4f}  "
-                f"| {sps:.1f} it/s | ETA {eta:.0f}s  "
-                + " ".join(f"{k}={v:.3f}" for k, v in parts.items()),
-                flush=True,
+            msg = (
+                f"step {step:>6}/{train_cfg.max_steps}  loss={total:8.2f} avg={ema:8.2f}  "
+                f"| {sps:4.1f} it/s | ETA {eta:4.0f}s | lr {lr:.1e}  "
+                + " ".join(f"{k}={v:.3f}" for k, v in parts.items())
             )
+            if val_samples and (step % val_every == 0 or step == train_cfg.max_steps):
+                vloss = _evaluate(net, val_samples, window=window, bs=bs,
+                                  weights=weights, device=device, seed=run.seed)
+                msg = f"{msg}  || val={vloss:.2f}"
+            print(msg, flush=True)
 
     out = _checkpoint_path(train_cfg)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)

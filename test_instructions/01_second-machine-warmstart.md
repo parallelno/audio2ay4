@@ -83,11 +83,25 @@ audio2ay4 train rl --corpus corpus/ym --out checkpoints/warmstart_rl.pt
 > RAM ceiling. Cached renders make later runs fast regardless.
 
 > **Training speed & device.** Training prints a banner like
-> `Training on cuda: 4942 tunes | batch 16 | window 512 | 2000 steps` — check it says **cuda**;
-> if it says **cpu**, your torch build can't see the GPU (reinstall the CUDA wheel from step 3).
-> Steps train on random `--window` frame crops (default 512) instead of whole songs, so each step
-> is fast and uniform; set `--window 0` to train on full songs (much slower). Progress prints the
-> first few steps then every 25, with `it/s` and `ETA`.
+> `Training on cuda: 4694 train / 247 val tunes | batch 16 | window 512 | 2000 steps | lr 3.0e-04`
+> — check it says **cuda**; if it says **cpu**, your torch build can't see the GPU (reinstall the
+> CUDA wheel from step 3). Steps train on random `--window` frame crops (default 512) instead of
+> whole songs, so each step is fast and uniform; set `--window 0` to train on full songs (slower).
+
+> **Reading the loss.** The per-step `loss=` is a noisy single mini-batch; watch `avg=` (EMA) and
+> the periodic `|| val=` (held-out tunes) for the real trend. `pitch`/`volume` are MSE in
+> semitones² / dB² — e.g. `pitch=250` means ~16 semitones RMS error, so you want these *well* below
+> ~50 before the checkpoint is useful. If `avg`/`val` flatten early and high, the model has only
+> learned per-head means — train longer and/or raise `--lr`.
+
+> **This is a real training job, not a smoke test.** The default `--max-steps 2000` is ~0.7 of one
+> epoch over the corpus and will only learn the output means. For a usable warm-start train much
+> longer, e.g.:
+> ```bash
+> audio2ay4 train rl --corpus corpus/ym --out checkpoints/warmstart_rl.pt \
+>   --max-steps 50000 --batch-size 64 --lr 3e-4 --window 512
+> ```
+> At ~12 it/s that's ~70 min on a GTX 1070. Watch `avg`/`val` fall; stop when they plateau.
 
 ## 8. Report back
 - Whether step 5 (pytest / cuda / validate render) all succeeded.

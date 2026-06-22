@@ -17,7 +17,7 @@ from audio2ay4.data.pairing import TrainingPair  # noqa: E402
 from audio2ay4.models.policy.network import ReversePlayer  # noqa: E402
 from audio2ay4.repr.state import FeatureFrames  # noqa: E402
 from audio2ay4.train.targets import build_targets  # noqa: E402
-from audio2ay4.train.warmstart import _crop, collate, pair_to_sample, train_step  # noqa: E402
+from audio2ay4.train.warmstart import _crop, _lr_at, collate, pair_to_sample, train_step  # noqa: E402
 from audio2ay4.train.warmstart_loss import warmstart_loss  # noqa: E402
 
 
@@ -63,6 +63,14 @@ def test_crop_windows_long_and_keeps_short():
     assert targets["env_shape"].shape == (16,)
     short = pair_to_sample(_synthetic_pair(10, seed=2))
     assert _crop(short, 16, rng) is short  # shorter than window → unchanged
+
+
+def test_lr_schedule_warmup_then_cosine_to_zero():
+    base, steps, warmup = 1e-3, 1000, 100
+    assert _lr_at(0, base, steps, warmup) == 0.0          # ramps from zero
+    assert _lr_at(warmup, base, steps, warmup) == pytest.approx(base)  # peak at warmup end
+    assert _lr_at(steps, base, steps, warmup) == pytest.approx(0.0, abs=1e-12)  # decays to ~0
+    assert 0.0 < _lr_at(550, base, steps, warmup) < base  # somewhere in between mid-run
 
 
 def test_warmstart_loss_is_finite():

@@ -106,7 +106,7 @@ def _cmd_train(args: argparse.Namespace) -> int:
         max_steps=args.max_steps, corpus_dir=args.corpus, cache_dir=args.cache_dir,
     )
     ckpt = train_warmstart(train_cfg, ym_paths, workers=args.workers,
-                           window=(args.window or None))
+                           window=(args.window or None), val_frac=args.val_frac)
     print(f"Checkpoint: {ckpt}")
     return 0
 
@@ -137,8 +137,10 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--out", default="", help="checkpoint output path (default: <cache>/warmstart_rl.pt)")
     t.add_argument("--cache-dir", default=".cache", help="feature/pair cache directory")
     t.add_argument("--batch-size", type=int, default=16)
-    t.add_argument("--lr", type=float, default=1e-4)
+    t.add_argument("--lr", type=float, default=3e-4)
     t.add_argument("--max-steps", type=int, default=2000)
+    t.add_argument("--val-frac", type=float, default=0.05,
+                   help="fraction of tunes held out for validation loss (0 = none)")
     t.add_argument("--window", type=int, default=512,
                    help="train on random N-frame windows (0 = whole songs; slower)")
     t.add_argument("--workers", type=int, default=0,
