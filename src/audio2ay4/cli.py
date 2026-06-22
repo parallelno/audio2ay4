@@ -62,6 +62,23 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _cmd_eval(args: argparse.Namespace) -> int:
+    from .eval import aggregate, evaluate_path
+
+    results = evaluate_path(args.input, _cfg(args))
+    if not results:
+        print(f"No audio files found at {args.input}.", file=sys.stderr)
+        return 1
+    print(f"{'track':<32} {'spec_dist':>10} {'stability':>10} {'legal':>6} {'frames':>8}")
+    for r in results:
+        print(f"{r.name[:32]:<32} {r.spectral_distance:>10.4f} {r.stability:>10.4f} "
+              f"{('yes' if r.legal else 'NO'):>6} {r.n_frames:>8}")
+    agg = aggregate(results)
+    print(f"\nmean over {int(agg['count'])}: spec_dist={agg['spectral_distance']:.4f} "
+          f"stability={agg['stability']:.4f} legality_rate={agg['legality_rate']:.3f}")
+    return 0 if agg["legality_rate"] >= 1.0 else 1
+
+
 def _cmd_stub(name: str, plan: str) -> int:
     print(f"`{name}` is not implemented yet — see design/{plan}.", file=sys.stderr)
     return 2
@@ -90,8 +107,10 @@ def build_parser() -> argparse.ArgumentParser:
     t = sub.add_parser("train", help="(stub) train a learned core")
     t.set_defaults(func=lambda _a: _cmd_stub("train", "plan-a-reinforcement-learning.md / plan-b-diffusion.md"))
 
-    e = sub.add_parser("eval", help="(stub) evaluate metrics")
-    e.set_defaults(func=lambda _a: _cmd_stub("eval", "README.md §evaluation"))
+    e = sub.add_parser("eval", help="convert audio (file or dir) and score fidelity/stability/legality")
+    e.add_argument("input", help="audio file or directory of audio files")
+    _add_common(e)
+    e.set_defaults(func=_cmd_eval)
 
     return parser
 
