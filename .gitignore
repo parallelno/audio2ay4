@@ -20,5 +20,11 @@ env/
 *.ym
 *.wav
 *.mp3
-data/
-cache/
+
+# Downloaded corpus + caches (keep the folder + its README, ignore bulk data)
+/corpus/**
+!/corpus/
+!/corpus/README.md
+!/corpus/.gitkeep
+/.cache/
+.cache/
