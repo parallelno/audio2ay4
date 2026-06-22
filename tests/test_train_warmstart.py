@@ -17,7 +17,7 @@ from audio2ay4.data.pairing import TrainingPair  # noqa: E402
 from audio2ay4.models.policy.network import ReversePlayer  # noqa: E402
 from audio2ay4.repr.state import FeatureFrames  # noqa: E402
 from audio2ay4.train.targets import build_targets  # noqa: E402
-from audio2ay4.train.warmstart import collate, pair_to_sample, train_step  # noqa: E402
+from audio2ay4.train.warmstart import _crop, collate, pair_to_sample, train_step  # noqa: E402
 from audio2ay4.train.warmstart_loss import warmstart_loss  # noqa: E402
 
 
@@ -52,6 +52,17 @@ def test_collate_pads_variable_lengths():
     assert pad[0].sum().item() == 12 and pad[1].sum().item() == 18
     assert targets["pitch"].shape == (2, 3, 18)
     assert targets["env_shape"].shape == (2, 18)
+
+
+def test_crop_windows_long_and_keeps_short():
+    rng = np.random.default_rng(0)
+    long = pair_to_sample(_synthetic_pair(40, seed=1))
+    feats, targets = _crop(long, 16, rng)
+    assert feats.shape == (16, 32)
+    assert targets["pitch"].shape == (3, 16)
+    assert targets["env_shape"].shape == (16,)
+    short = pair_to_sample(_synthetic_pair(10, seed=2))
+    assert _crop(short, 16, rng) is short  # shorter than window → unchanged
 
 
 def test_warmstart_loss_is_finite():

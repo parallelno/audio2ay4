@@ -70,9 +70,10 @@ audio2ay4 train rl --corpus corpus/ym --limit 8 --max-steps 50
 ## 7. Full warm-start run
 ```bash
 audio2ay4 train rl --corpus corpus/ym --out checkpoints/warmstart_rl.pt
-# Defaults: batch-size 16, lr 1e-4, max-steps 2000, workers 0 (= all CPU cores). Override e.g.
+# Defaults: batch-size 16, lr 1e-4, max-steps 2000, workers 0 (= all cores), window 512.
+# Override e.g.
 # audio2ay4 train rl --corpus corpus/ym --max-steps 20000 --batch-size 32 \
-#   --workers 32 --out checkpoints/warmstart_rl.pt
+#   --window 512 --workers 32 --out checkpoints/warmstart_rl.pt
 # GPU is selected automatically when available.
 ```
 
@@ -80,6 +81,13 @@ audio2ay4 train rl --corpus corpus/ym --out checkpoints/warmstart_rl.pt
 > is now parallelised across processes — `--workers 0` (default) uses every core. On a 32-core box
 > that turns a ~56-minute serial render into a couple of minutes. Lower `--workers` if you hit a
 > RAM ceiling. Cached renders make later runs fast regardless.
+
+> **Training speed & device.** Training prints a banner like
+> `Training on cuda: 4942 tunes | batch 16 | window 512 | 2000 steps` — check it says **cuda**;
+> if it says **cpu**, your torch build can't see the GPU (reinstall the CUDA wheel from step 3).
+> Steps train on random `--window` frame crops (default 512) instead of whole songs, so each step
+> is fast and uniform; set `--window 0` to train on full songs (much slower). Progress prints the
+> first few steps then every 25, with `it/s` and `ETA`.
 
 ## 8. Report back
 - Whether step 5 (pytest / cuda / validate render) all succeeded.

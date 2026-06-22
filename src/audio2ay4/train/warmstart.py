@@ -11,6 +11,7 @@ be unit-tested on CPU with synthetic batches (the §A.11 "overfit one batch" can
 from __future__ import annotations
 
 import os
+import time
 
 import numpy as np
 import torch
@@ -87,12 +88,30 @@ def _checkpoint_path(train_cfg: TrainConfig) -> str:
     )
 
 
+def _crop(sample: Sample, window: int | None, rng: np.random.Generator) -> Sample:
+    """Random fixed-length time window of a sample (full sample if shorter than ``window``).
+
+    Training on whole songs makes each step pad to the batch's longest tune (thousands of frames),
+    which is both slow and mostly wasted compute. Cropping bounds per-step cost and keeps batches
+    uniform, so throughput no longer depends on the longest tune in the draw.
+    """
+    feats, targets = sample
+    t = feats.shape[0]
+    if window is None or t <= window:
+        return sample
+    s = int(rng.integers(0, t - window + 1))
+    e = s + window
+    cropped = {k: (v[..., s:e] if v.ndim == 1 else v[:, s:e]) for k, v in targets.items()}
+    return feats[s:e], cropped
+
+
 def train_warmstart(
     train_cfg: TrainConfig,
     ym_paths: list[str],
     *,
     device: str | None = None,
     workers: int | None = None,
+    window: int | None = 512,
     log_every: int = 25,
 ) -> str:
     """Render → pair → pretrain the reverse player; save a checkpoint. Returns its path.
@@ -118,13 +137,26 @@ def train_warmstart(
     weights = WarmstartWeights()
 
     bs = max(1, min(train_cfg.batch_size, len(samples)))
+    print(
+        f"Training on {device}: {len(samples)} tunes | batch {bs} | window {window or 'full'} "
+        f"| {train_cfg.max_steps} steps",
+        flush=True,
+    )
+    t0 = time.monotonic()
     for step in range(1, train_cfg.max_steps + 1):
         idx = rng.choice(len(samples), size=bs, replace=len(samples) < bs)
-        batch = collate([samples[i] for i in idx], device=device)
+        batch = collate([_crop(samples[i], window, rng) for i in idx], device=device)
         total, parts = train_step(net, opt, batch, weights)
-        if step % log_every == 0 or step == 1:
-            print(f"step {step:>6}/{train_cfg.max_steps}  loss={total:.4f}  "
-                  + " ".join(f"{k}={v:.3f}" for k, v in parts.items()))
+        if step <= 3 or step % log_every == 0 or step == train_cfg.max_steps:
+            elapsed = time.monotonic() - t0
+            sps = step / elapsed if elapsed > 0 else 0.0
+            eta = (train_cfg.max_steps - step) / sps if sps > 0 else 0.0
+            print(
+                f"step {step:>6}/{train_cfg.max_steps}  loss={total:.4f}  "
+                f"| {sps:.1f} it/s | ETA {eta:.0f}s  "
+                + " ".join(f"{k}={v:.3f}" for k, v in parts.items()),
+                flush=True,
+            )
 
     out = _checkpoint_path(train_cfg)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
