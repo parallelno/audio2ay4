@@ -34,7 +34,7 @@ def get_core(name: str, cfg: RunConfig) -> LearnedCore:
     _bootstrap()
     if name == "rl" and name not in _REGISTRY:
         try:
-            from . import policy  # noqa: F401  (registers 'rl' on import)
+            from .policy import core as _rl_core  # noqa: F401  (registers 'rl' on import)
         except ImportError as exc:
             raise NotImplementedError(
                 "The 'rl' core requires the neural extra (torch). "

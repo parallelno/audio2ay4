@@ -63,17 +63,23 @@ audio2ay4 validate samples/ym/song01.ym -o song01.wav
 ## 6. Smoke-test the training end-to-end (renders only a few tunes)
 ```bash
 audio2ay4 train rl --corpus corpus/ym --limit 8 --max-steps 50
-# Expect: per-step loss lines, then "Saved warm-start checkpoint -> .cache/warmstart_rl.pt"
+# Expect: a "Rendering 8 YM files (workers=N) …" line, per-step loss lines, then
+# "Saved warm-start checkpoint -> .cache/warmstart_rl.pt"
 ```
 
 ## 7. Full warm-start run
 ```bash
 audio2ay4 train rl --corpus corpus/ym --out checkpoints/warmstart_rl.pt
-# Defaults: batch-size 16, lr 1e-4, max-steps 2000. Override as needed, e.g.
+# Defaults: batch-size 16, lr 1e-4, max-steps 2000, workers 0 (= all CPU cores). Override e.g.
 # audio2ay4 train rl --corpus corpus/ym --max-steps 20000 --batch-size 32 \
-#   --out checkpoints/warmstart_rl.pt
+#   --workers 32 --out checkpoints/warmstart_rl.pt
 # GPU is selected automatically when available.
 ```
+
+> **Render speed.** The first run renders the whole corpus through the emulator (CPU-bound). This
+> is now parallelised across processes — `--workers 0` (default) uses every core. On a 32-core box
+> that turns a ~56-minute serial render into a couple of minutes. Lower `--workers` if you hit a
+> RAM ceiling. Cached renders make later runs fast regardless.
 
 ## 8. Report back
 - Whether step 5 (pytest / cuda / validate render) all succeeded.
