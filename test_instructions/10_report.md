@@ -32,5 +32,18 @@ It's live — Rendering 4961 YM files … appeared. Now it's working through the
 every 100 files until all are cached, then training steps begin. The process is alive and progressing.
 
 
+the user's feedback:
+the current stdout output:
+PS C:\Work\Programming\audio2ay4> .\.venv\Scripts\Activate.ps1; audio2ay4 train rl --corpus corpus/ym --out checkpoints/warmstart_rl.pt 2>&1
+Rendering 4961 YM files …
+  rendered 100/4961 (2%) | ok 100 | 1.4 f/s | ETA 3390s
+  rendered 200/4961 (4%) | ok 200 | 1.5 f/s | ETA 3271s
+[skip] corpus/ym\- unknown\european demo loader music.ym: Unrecognised YM magic: b'MIX1'
+  rendered 300/4961 (6%) | ok 299 | 1.4 f/s | ETA 3343s
+  rendered 400/4961 (8%) | ok 399 | 1.3 f/s | ETA 3586s
+  rendered 500/4961 (10%) | ok 499 | 1.3 f/s | ETA 3459s
+  rendered 600/4961 (12%) | ok 599 | 1.3 f/s | ETA 3432s
+  rendered 700/4961 (14%) | ok 699 | 1.3 f/s | ETA 3283s
+
 My request now to you:
 the proccess is utilizing just 10-15% of cpu on 32 core system. the estimate 56 minutes. is there an option to improve it?
