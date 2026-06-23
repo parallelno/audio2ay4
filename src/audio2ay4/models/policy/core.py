@@ -110,6 +110,13 @@ def _decode(h: dict[str, np.ndarray], n_frames: int) -> AYState:
     env_rate = _ENV_RATE_HZ[np.argmax(h["env_rate_logits"], axis=0)]          # (T,) Hz
     env_shape = np.argmax(h["env_shape"], axis=0).astype(int)                # (T,)
     env_retrig = h["env_retrig"][0] > 0.0
+    # The hardware latches the envelope period (R11/R12) when the envelope is (re)triggered and runs
+    # it until the next retrigger. The compiler writes R11/R12 every frame, so letting the per-frame
+    # rate jitter between adjacent bins churns them needlessly. Sample-and-hold: adopt a new rate
+    # only on retrigger frames, carry it forward otherwise (matches the chip and keeps R11/R12 stable).
+    hold_idx = np.where(env_retrig, np.arange(n_frames), 0)
+    np.maximum.accumulate(hold_idx, out=hold_idx)
+    env_rate = env_rate[hold_idx]
 
     state: AYState = []
     for t in range(n_frames):
