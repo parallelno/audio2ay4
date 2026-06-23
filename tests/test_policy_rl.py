@@ -56,7 +56,12 @@ def test_rl_core_handles_empty_input():
 
 def test_reverse_player_head_shapes():
     from audio2ay4.models.policy.network import ReversePlayer
-    from audio2ay4.models.policy.spec import N_ENV_RATE_BINS, N_PITCH_BINS, N_VOL_LEVELS
+    from audio2ay4.models.policy.spec import (
+        N_ENV_RATE_BINS,
+        N_NOISE_LEVELS,
+        N_PITCH_BINS,
+        N_VOL_LEVELS,
+    )
 
     net = ReversePlayer(in_dim=80, hidden=32).eval()
     x = torch.randn(2, 80, 17)  # (B, in_dim, T)
@@ -64,10 +69,11 @@ def test_reverse_player_head_shapes():
         out = net(x)
     assert out["pitch_logits"].shape == (2, 3, N_PITCH_BINS, 17)
     assert out["volume_logits"].shape == (2, 3, N_VOL_LEVELS, 17)
+    assert out["noise_pitch_logits"].shape == (2, N_NOISE_LEVELS, 17)
     assert out["env_rate_logits"].shape == (2, N_ENV_RATE_BINS, 17)
     expected = {
         "tone_logit": 3, "noise_logit": 3, "env_use_logit": 3,
-        "noise_pitch": 1, "env_shape": 16, "env_retrig": 1,
+        "env_shape": 16, "env_retrig": 1,
     }
     for name, ch in expected.items():
         assert out[name].shape == (2, ch, 17), name

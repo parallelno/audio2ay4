@@ -1,10 +1,10 @@
-"""Supervised warm-start loss (design A.5): regress continuous heads, classify gates/categoricals.
+"""Supervised warm-start loss (design A.5): classify every register head against the corpus.
 
 Operates on the reverse player's **raw** head outputs and the padded target batch from
-``warmstart``. Continuous heads are decoded with the *same* transforms inference uses (so train and
-inference agree), then compared in natural units (semitones, dB, log-Hz, probability). Gate heads
-use BCE-with-logits; ``env_shape`` uses cross-entropy. Every term is masked: pitch only where the
-tone is on, volume only where a voice is audible and not envelope-controlled, and the envelope
+``warmstart``. Pitch, volume, noise period, envelope rate and envelope shape are categorical
+(cross-entropy over their hardware register levels); the tone/noise/env gates use BCE-with-logits.
+Every term is masked: pitch only where the tone is on, volume only where a voice is audible and not
+envelope-controlled, the noise period only where some voice gates noise on, and the envelope
 rate/shape only on frames that (re)write R13.
 
 The three AY tone channels render to identical timbres, so the corpus's A/B/C voice ordering is not
@@ -37,11 +37,6 @@ class WarmstartWeights:
     env_rate: float = 0.5
     env_shape: float = 0.5
     env_retrig: float = 0.5
-
-
-def _masked_mse(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    denom = mask.sum().clamp(min=1.0)
-    return (mask * (pred - target) ** 2).sum() / denom
 
 
 def _masked_bce(logit: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -133,13 +128,13 @@ def warmstart_loss(
     tone_t = pt["tone"]
     audible = torch.maximum(tone_t, pt["noise"])         # voice contributes sound
 
-    # Continuous shared heads decoded exactly as at inference; pitch, volume and the envelope rate
-    # are classifications (over semitone bins / DAC levels / log-spaced rate bins).
-    np_pred = torch.sigmoid(heads["noise_pitch"].squeeze(1))
-
     pitch_mask = tone_t * pad1
     vol_mask = audible * (1.0 - pt["env_use"]) * pad1
     env_active = targets["env_retrig"] * pad_mask        # (B, T) — shared head, no permutation
+    # R6 (noise period) is shared and only audible while some voice gates noise on; scoring it
+    # everywhere wastes capacity and lets it churn on silent frames (max over voices is
+    # permutation-invariant, so the relabelling above is irrelevant here).
+    noise_active = targets["noise"].amax(dim=1) * pad_mask  # (B, T)
 
     # Cross-entropy over pitch bins / volume levels: logits (B, V, C, T) → (B, C, V, T).
     pitch_ce = F.cross_entropy(
@@ -155,7 +150,9 @@ def warmstart_loss(
         "tone": _masked_bce(heads["tone_logit"], tone_t, pad1.expand_as(tone_t)),
         "noise": _masked_bce(heads["noise_logit"], pt["noise"], pad1.expand_as(tone_t)),
         "env_use": _masked_bce(heads["env_use_logit"], pt["env_use"], pad1.expand_as(tone_t)),
-        "noise_pitch": _masked_mse(np_pred, targets["noise_pitch"], pad_mask),
+        "noise_pitch": _masked_ce(
+            heads["noise_pitch_logits"], targets["noise_pitch_level"], noise_active
+        ),
         "env_rate": _masked_ce(heads["env_rate_logits"], targets["env_rate_bin"], env_active),
         "env_shape": _masked_ce(heads["env_shape"], targets["env_shape"], env_active),
         "env_retrig": _masked_bce(heads["env_retrig"].squeeze(1), targets["env_retrig"], pad_mask),

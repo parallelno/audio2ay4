@@ -22,12 +22,14 @@ from ..base import register_core
 from .network import ReversePlayer
 from .spec import (
     N_ENV_RATE_BINS,
+    N_NOISE_LEVELS,
     N_VOICES,
     N_VOL_LEVELS,
     PITCH_BIN_WIDTH,
     PITCH_MIN,
     VOL_FLOOR_DB,
     bin_to_env_rate,
+    noise_level_to_pitch,
     vol_level_to_db,
 )
 
@@ -42,10 +44,10 @@ _LEVEL_DB = np.array(
 # Envelope-rate bin → Hz lookup (decode picks the arg-max log-spaced bin centre).
 _ENV_RATE_HZ = np.array([bin_to_env_rate(i) for i in range(N_ENV_RATE_BINS)], dtype=np.float32)
 
-
-def _sigmoid(x: np.ndarray) -> np.ndarray:
-    # Numerically stable logistic via tanh identity.
-    return 0.5 * (1.0 + np.tanh(0.5 * x))
+# Noise-period level → brightness lookup (decode picks the arg-max 5-bit noise-period class).
+_NOISE_BRIGHT = np.array(
+    [noise_level_to_pitch(i) for i in range(N_NOISE_LEVELS)], dtype=np.float32
+)
 
 
 class RLCore:
@@ -106,10 +108,17 @@ def _decode(h: dict[str, np.ndarray], n_frames: int) -> AYState:
     tone_on = h["tone_logit"] > 0.0
     noise_on = h["noise_logit"] > 0.0
     env_use = h["env_use_logit"] > 0.0
-    noise_pitch = _sigmoid(h["noise_pitch"][0])                              # (T,)
+    noise_pitch = _NOISE_BRIGHT[np.argmax(h["noise_pitch_logits"], axis=0)]   # (T,) brightness
     env_rate = _ENV_RATE_HZ[np.argmax(h["env_rate_logits"], axis=0)]          # (T,) Hz
     env_shape = np.argmax(h["env_shape"], axis=0).astype(int)                # (T,)
     env_retrig = h["env_retrig"][0] > 0.0
+    # R6 (noise period) is shared and only audible while some voice gates noise on. Re-deciding it
+    # on silent frames churns R6 (it dominated the compiled stream). Sample-and-hold: adopt a new
+    # noise period only on frames where noise is gated on, carry it forward otherwise.
+    noise_active = noise_on.any(axis=0)                                       # (T,)
+    n_hold = np.where(noise_active, np.arange(n_frames), 0)
+    np.maximum.accumulate(n_hold, out=n_hold)
+    noise_pitch = noise_pitch[n_hold]
     # The hardware latches the envelope period (R11/R12) when the envelope is (re)triggered and runs
     # it until the next retrigger. The compiler writes R11/R12 every frame, so letting the per-frame
     # rate jitter between adjacent bins churns them needlessly. Sample-and-hold: adopt a new rate

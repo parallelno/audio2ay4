@@ -9,7 +9,14 @@ from __future__ import annotations
 
 import math
 
-from ...repr.compile import db_to_level, level_to_db
+from ...repr.compile import (
+    NP_MAX,
+    NP_MIN,
+    db_to_level,
+    level_to_db,
+    noise_pitch_to_np,
+    np_to_noise_pitch,
+)
 
 N_VOICES = 3
 N_ENV_SHAPES = 16
@@ -83,3 +90,21 @@ def bin_to_env_rate(b: int) -> float:
     """Inverse of :func:`env_rate_to_bin`: bin index → envelope rate in Hz (bin centre)."""
     frac = b / (N_ENV_RATE_BINS - 1)
     return math.exp(_ENV_RATE_LOG_MIN + frac * (_ENV_RATE_LOG_MAX - _ENV_RATE_LOG_MIN))
+
+
+# Noise pitch (brightness) writes the 5-bit noise-period register R6 (NP in [1, 31]). A continuous
+# regression jitters by a level every frame and churns R6 (it dominated the compiled stream), so we
+# classify it over the 31 discrete noise-period values instead — same fix as pitch/volume/env_rate.
+# The brightness↔period mapping is the compiler's canonical table (single source of truth).
+N_NOISE_LEVELS = NP_MAX - NP_MIN + 1  # 31 distinct 5-bit noise-period values (1..31)
+
+
+def noise_pitch_to_level(brightness: float) -> int:
+    """Brightness 0..1 → noise-period class index in ``[0, N_NOISE_LEVELS)`` (compiler table)."""
+    return noise_pitch_to_np(brightness) - NP_MIN
+
+
+def noise_level_to_pitch(level: int) -> float:
+    """Inverse: noise-period class index → brightness 0..1 via the compiler's noise-period table."""
+    return np_to_noise_pitch(int(level) + NP_MIN)
+

@@ -18,7 +18,14 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from .spec import N_ENV_RATE_BINS, N_ENV_SHAPES, N_PITCH_BINS, N_VOICES, N_VOL_LEVELS
+from .spec import (
+    N_ENV_RATE_BINS,
+    N_ENV_SHAPES,
+    N_NOISE_LEVELS,
+    N_PITCH_BINS,
+    N_VOICES,
+    N_VOL_LEVELS,
+)
 
 
 class _ResidualBlock(nn.Module):
@@ -53,7 +60,7 @@ class ReversePlayer(nn.Module):
       * ``tone_logit``    (B, 3, T)   Bernoulli gate, per voice
       * ``noise_logit``   (B, 3, T)   Bernoulli gate, per voice
       * ``env_use_logit`` (B, 3, T)   Bernoulli gate, per voice
-      * ``noise_pitch``   (B, 1, T)   continuous, shared
+      * ``noise_pitch_logits`` (B, P, T) categorical over P noise-period levels, shared
       * ``env_rate_logits`` (B, R, T) categorical over R log-spaced rate bins, shared
       * ``env_shape``     (B, 16, T)  categorical logits, shared
       * ``env_retrig``    (B, 1, T)   Bernoulli gate, shared
@@ -80,7 +87,7 @@ class ReversePlayer(nn.Module):
         self.head_tone = nn.Conv1d(hidden, N_VOICES, 1)
         self.head_noise = nn.Conv1d(hidden, N_VOICES, 1)
         self.head_env_use = nn.Conv1d(hidden, N_VOICES, 1)
-        self.head_noise_pitch = nn.Conv1d(hidden, 1, 1)
+        self.head_noise_pitch = nn.Conv1d(hidden, N_NOISE_LEVELS, 1)
         self.head_env_rate = nn.Conv1d(hidden, N_ENV_RATE_BINS, 1)
         self.head_env_shape = nn.Conv1d(hidden, N_ENV_SHAPES, 1)
         self.head_env_retrig = nn.Conv1d(hidden, 1, 1)
@@ -103,7 +110,7 @@ class ReversePlayer(nn.Module):
             "tone_logit": self.head_tone(h),
             "noise_logit": self.head_noise(h),
             "env_use_logit": self.head_env_use(h),
-            "noise_pitch": self.head_noise_pitch(h),
+            "noise_pitch_logits": self.head_noise_pitch(h),
             "env_rate_logits": self.head_env_rate(h),
             "env_shape": self.head_env_shape(h),
             "env_retrig": self.head_env_retrig(h),

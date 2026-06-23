@@ -50,6 +50,9 @@ def test_build_targets_shapes():
     assert t["env_rate_bin"].shape == (20,)
     assert t["env_rate_bin"].dtype == np.int64
     assert 0 <= t["env_rate_bin"].min() and t["env_rate_bin"].max() < 48
+    assert t["noise_pitch_level"].shape == (20,)
+    assert t["noise_pitch_level"].dtype == np.int64
+    assert 0 <= t["noise_pitch_level"].min() and t["noise_pitch_level"].max() < 31
 
 
 def test_collate_pads_variable_lengths():
@@ -64,6 +67,8 @@ def test_collate_pads_variable_lengths():
     assert targets["env_shape"].shape == (2, 18)
     assert targets["env_rate_bin"].shape == (2, 18)
     assert targets["env_rate_bin"].dtype == torch.int64
+    assert targets["noise_pitch_level"].shape == (2, 18)
+    assert targets["noise_pitch_level"].dtype == torch.int64
 
 
 def test_crop_windows_long_and_keeps_short():
