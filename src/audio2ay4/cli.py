@@ -100,7 +100,6 @@ def _cmd_train(args: argparse.Namespace) -> int:
         return _cmd_stub("train", "plan-b-diffusion.md")
     from .config import TrainConfig
     from .data.corpus import find_ym_files
-    from .train.warmstart import train_warmstart
 
     ym_paths = find_ym_files(args.corpus)
     if not ym_paths:
@@ -108,6 +107,11 @@ def _cmd_train(args: argparse.Namespace) -> int:
         return 1
     if args.limit > 0:
         ym_paths = ym_paths[: args.limit]
+
+    if args.regime == "reward":
+        return _train_reward(args, ym_paths)
+
+    from .train.warmstart import train_warmstart
 
     run = _cfg(args)
     reg = {"weight_decay": args.weight_decay, "dropout": args.dropout, "feat_noise": args.feat_noise}
@@ -120,6 +124,33 @@ def _cmd_train(args: argparse.Namespace) -> int:
     )
     ckpt = train_warmstart(train_cfg, ym_paths, workers=args.workers,
                            window=(args.window or None), val_frac=args.val_frac)
+    print(f"Checkpoint: {ckpt}")
+    return 0
+
+
+def _train_reward(args: argparse.Namespace, ym_paths: list[str]) -> int:
+    """Regime-1 reward (analysis-by-synthesis) fine-tuning — design A.4."""
+    from .config import TrainConfig
+    from .train.reward import RewardWeights
+    from .train.reward_train import train_reward
+
+    run = _cfg(args)
+    run = replace(run, core="rl", extra={
+        **run.extra, **({"checkpoint": args.out} if args.out else {})
+    })
+    train_cfg = TrainConfig(
+        plan="rl", run=run, batch_size=args.batch_size, lr=args.lr,
+        max_steps=args.max_steps, corpus_dir=args.corpus, cache_dir=args.cache_dir,
+    )
+    weights = RewardWeights(spectral=args.w_spec, jitter=args.w_jitter)
+    ckpt = train_reward(
+        train_cfg, ym_paths,
+        init_checkpoint=(args.init or None),
+        workers=args.workers,
+        window=(args.window or None),
+        weights=weights,
+        tau=args.tau,
+    )
     print(f"Checkpoint: {ckpt}")
     return 0
 
@@ -144,8 +175,10 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("input")
     v.set_defaults(func=_cmd_validate)
 
-    t = sub.add_parser("train", help="train a learned core (Plan A warm-start)")
+    t = sub.add_parser("train", help="train a learned core (Plan A warm-start / reward)")
     t.add_argument("plan", nargs="?", default="rl", choices=["rl", "diffusion"], help="which plan")
+    t.add_argument("--regime", default="warmstart", choices=["warmstart", "reward"],
+                   help="warmstart = supervised A2; reward = Regime-1 analysis-by-synthesis (A4)")
     t.add_argument("--corpus", default="corpus/ym", help="directory of .ym training tunes")
     t.add_argument("--out", default="", help="checkpoint output path (default: <cache>/warmstart_rl.pt)")
     t.add_argument("--cache-dir", default=".cache", help="feature/pair cache directory")
@@ -165,6 +198,15 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--workers", type=int, default=0,
                    help="parallel render processes (0 = all CPU cores)")
     t.add_argument("--limit", type=int, default=0, help="use only the first N tunes (0 = all)")
+    # Reward-regime (A4) options.
+    t.add_argument("--init", default="",
+                   help="[reward] warm-start checkpoint to initialise E from (recommended)")
+    t.add_argument("--w-spec", type=float, default=1.0,
+                   help="[reward] multi-scale spectral term weight")
+    t.add_argument("--w-jitter", type=float, default=0.02,
+                   help="[reward] control jitter (stability) penalty weight")
+    t.add_argument("--tau", type=float, default=1.0,
+                   help="[reward] soft-argmax temperature for the head relaxation")
     _add_common(t)
     t.set_defaults(func=_cmd_train)
 
