@@ -22,6 +22,7 @@ Audio (mp3/wav/...) → AY-3-8910/YM2149 register stream (.ym) + audio preview.
 - Recreate venv: `& "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m venv .venv`
 - Install order used (all OK): `pip install -e ".[dev]"`; `pip install -e ".[audio]"`; `pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu`; `pip install -e ".[ay3]"`.
 - Installed versions: torch 2.12.1+cpu, torchaudio 2.11.0+cpu, numpy 2.4.6 (numba/audio2ay3 pins <2.5 → downgraded from 2.5.0), soundfile 0.14.0, audio2ay3 0.1.0 (numba 0.65.1, llvmlite 0.47.0).
+- GPU: this machine HAS an **NVIDIA RTX 4090 (24 GB)** + 32 logical cores. Swapped the cpu torch wheel for CUDA: `pip uninstall -y torch torchaudio; pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124` → **torch 2.6.0+cu124** (cu124 index caps at 2.6.0). `torch.cuda.is_available()` True; training auto-selects cuda (TrainConfig.run.use_gpu default True). Warm-start ran 53.8 it/s.
 - NOTE: pwsh chains the venv path oddly if a `cd` precedes it on the same line; prefer `Set-Location <repo>` first OR call python by absolute path.
 - Tests: `.\.venv\Scripts\python.exe -m pytest` → 30 passed in ~6s (incl. audio2ay3-backed pairing). `ruff check src tests` clean.
 
@@ -164,9 +165,19 @@ Audio (mp3/wav/...) → AY-3-8910/YM2149 register stream (.ym) + audio preview.
 - IMPORTANT: checkpoints already incompatible (prior pitch head change); volume head shape change (3→48 outputs) reinforces that — retrain FRESH. Render CACHE still valid (stores feats+regs; targets rebuilt in pair_to_sample), so NO re-render.
 - 30 tests pass, ruff clean, render import torch-free verified.
 
+## Plan A — A2 volume classification: v4 RESULT (50k, RTX 4090) + encoding fix
+- Ran on the NEW working machine (RTX 4090, torch 2.6.0+cu124 — swapped the cpu wheel for `--index-url https://download.pytorch.org/whl/cu124`; cu124 tops out at torch 2.6.0, fine). First run rendered all 4961 YM fresh → cache `.cache` now has 4942 npz (19 foreign/corrupt skipped: MIX1/YMT magic, LHA Huffman, etc., expected). Render ~28 f/s on 32 workers.
+- Training: 50k steps, batch 64, lr 3e-4, window 512, cuda @ **53.8 it/s** (~15.5 min). Checkpoint `checkpoints/warmstart_rl_v4.pt` (3.37 MB, {model,in_dim,hidden}).
+- RESULT (per-head @50k, CE in nats): **pitch CE ~1.30** (v3 was 2.64 — broke well below 2!), **volume CE ~1.45** (random ln(16)=2.77 → volume classification WORKS, the fix succeeded), tone 0.19 / noise 0.13 / env_use 0.09 / noise_pitch 0.07 / env_shape ~0.1 / env_retrig ~0.15. train avg ~4.2.
+- env_rate is now the noisy outlier: log-space MSE swings 0.0..68 between steps (rare envelope frames; 0.000 when a batch has none). Weighted 0.5 it dominates the step-to-step loss variance, NOT the real signal.
+- VAL: val=8.57 vs train avg 4.20 (~2x) = moderate overfit, but BOTH pitch & volume are far below random so real audio→register signal was learned. NOTE: v4 val (8.57) is NOT comparable to v3 val (111) — the loss composition changed (volume MSE→CE).
+- BUG FOUND + FIXED: run crashed on the FINAL line only — `print("Saved warm-start checkpoint → {out}")` raised UnicodeEncodeError because the Windows console is cp1252 and can't encode `→`. The `torch.save` runs BEFORE that print, so the checkpoint WAS saved (verified). Fix: `cli.main()` now reconfigures `sys.stdout`/`sys.stderr` to `encoding="utf-8", errors="replace"` at entry (guards ALL non-ASCII output: `→`, `…`, `—` in cli/render/warmstart prints) — single boundary fix, no behavior change. Verified with a tiny cached `--max-steps 5 --limit 60` run: save+print path works, no crash.
+- 30 tests pass, ruff clean.
+
 ## Decision log (latest)
-- Q: run full 50K warm-start now? A: volume→classification fix is now DONE (loss/head only, reuses cache). Recommended next run on a machine with the corpus: `audio2ay4 train rl --corpus corpus/ym --max-steps 50000 --batch-size 64 --lr 3e-4` (fresh checkpoint). Watch `avg`/`val` fall; want pitch CE <2 and volume CE well below ln(16)≈2.77. If volume CE drops but pitch CE still floors ~2.6 → next lever = CQT features (changes cfg_key → full re-render).
-- NEXT ACTION when picked up: run the long warm-start (above) and read the per-head log. Old NEXT ACTION (implement volume→16-level DAC classification) is COMPLETE.
+- volume→classification: DONE and VALIDATED on real 50k run (volume CE 1.45 << 2.77 random; pitch also improved to 1.30). The v3 "volume ceiling" is broken.
+- NEXT LEVERS (pick when picked up): (1) shrink the train/val gap (val 8.57 vs train 4.2) — add small weight_decay/dropout or more data aug; (2) CQT features for pitch CE<1 (changes data/pairing cfg_key → FULL re-render); (3) tame env_rate loss noise (rare-frame, log-space) — maybe lower its weight or classify env period. (4) Then A3/A4 differentiable-emulator reward.
+- To use v4 core at inference: RunConfig(core='rl', extra={'checkpoint':'checkpoints/warmstart_rl_v4.pt'}). Try `audio2ay4 convert <suno.mp3> out.ym --core rl` (need extra wiring for checkpoint via CLI — not yet a flag) or eval.
 
 ## NOT yet done (next options)
 - A3: chip/diff differentiable emulator (DDSP square+noise+env, validate vs trusted emulator). A4: Regime-1 reward training (analysis-by-synthesis, eval.spectral_distance + embedding + chroma/onset). A5: real/augmented (Suno) reward phase + jitter/idiomatic regularizers. A6: optional PPO.

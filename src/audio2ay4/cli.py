@@ -158,6 +158,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows consoles default to a legacy code page (cp1252) that can't encode characters like
+    # "→"/"…" in our progress output, which would raise UnicodeEncodeError mid-run. Emit UTF-8 and
+    # replace anything the stream truly can't represent so logging never crashes the training run.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

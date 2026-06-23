@@ -25,3 +25,7 @@ corpus/**/_failures.log
 # Local caches
 /.cache/
 .cache/
+
+# Training outputs (regenerable: checkpoints retrain in ~15 min; logs are transient)
+/checkpoints/
+*.log
