@@ -38,7 +38,8 @@ Audio (mp3/wav/...) → AY-3-8910/YM2149 register stream (.ym) + audio preview.
 - Register compiler `repr/compile.py::compile_state` is the SINGLE deterministic legality gate. Learned cores emit smooth `AYState` only; never raw registers.
 - `chip/legality.py::is_legal` is pure (numpy only, no audio2ay3) — test oracle.
 - `models/base.py` registry + `LearnedCore` Protocol(`infer(feats,cfg)->AYState`). `get_core("rl"|"diffusion")` raises NotImplementedError pointing to design plans. `dummy` core = placeholder baseline.
-- Pipelines: `convert/pipeline.py` (audio→ym), `preview/render.py` (ym→audio). CLI: `cli.py` subcommands convert/preview/validate (+train/eval stubs).
+- Pipelines: `convert/pipeline.py` (audio→ym), `preview/render.py` (ym→audio). CLI: `cli.py` subcommands convert/preview/validate/eval/train.
+- CLI `_add_common` (convert/preview/eval/train) takes `--core` (dummy|rl), `--checkpoint <.pt>`, `--hidden N` (default 128). `_cfg(args)` packs checkpoint/hidden into `RunConfig.extra` which `RLCore` reads. Use trained core: `... convert in.wav out.ym --core rl --checkpoint checkpoints/warmstart_rl_v4.pt`. `cli.main()` reconfigures stdout/stderr to utf-8 errors=replace (cp1252 console can't encode →/…).
 - Core stays numpy-only importable; torch/soundfile/audio2ay3 are optional extras (audio/neural/ay3), imported lazily.
 
 ## Milestone 0 — COMPLETE (design §7 all items green)
@@ -53,6 +54,7 @@ Audio (mp3/wav/...) → AY-3-8910/YM2149 register stream (.ym) + audio preview.
 
 ## Verified end-to-end
 1s tone.wav → 50-frame YM @50Hz → 1s preview.wav, validate=LEGAL. `eval` on a tone → spec_dist/stability/legal table. Works.
+- Trained rl core (v4) verified via CLI: `convert samples/short/02_bass_and_lead.wav --core rl --checkpoint ...v4.pt` → 150-frame LEGAL YM. `eval samples/short` rl vs dummy: rl mean spec_dist **0.142** / stability **0.683** vs dummy 0.210 / 0.455 (both legality_rate 1.0). Warm-start beats baseline on real SUNO-style audio.
 
 ## HARDWARE CONSTRAINT — RESOLVED (new machine, 2026-06)
 - The OLD working machine had a BROKEN CPU that segfaulted native code (audio2ay3 LHA depack / emulator render). That machine is GONE.

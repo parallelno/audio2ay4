@@ -22,14 +22,24 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--clock", type=int, default=DEFAULT_MASTER_CLOCK_HZ, help="AY master clock (Hz)")
     p.add_argument("--frame-rate", type=int, default=DEFAULT_FRAME_RATE_HZ, help="frames per second")
     p.add_argument("--sample-rate", type=int, default=44_100, help="audio sample rate (Hz)")
+    p.add_argument("--checkpoint", default="",
+                   help="trained core checkpoint, e.g. a warm-start .pt (used by --core rl)")
+    p.add_argument("--hidden", type=int, default=128,
+                   help="hidden width of the learned core (must match the checkpoint)")
 
 
 def _cfg(args: argparse.Namespace) -> RunConfig:
+    extra: dict = {}
+    if getattr(args, "checkpoint", ""):
+        extra["checkpoint"] = args.checkpoint
+    if getattr(args, "hidden", None):
+        extra["hidden"] = args.hidden
     return RunConfig(
         core=args.core,
         master_clock_hz=args.clock,
         frame_rate_hz=args.frame_rate,
         sample_rate=args.sample_rate,
+        extra=extra,
     )
 
 
