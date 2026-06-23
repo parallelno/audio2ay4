@@ -19,13 +19,13 @@ import torch
 
 from ..config import RunConfig, TrainConfig
 from ..models.policy.network import ReversePlayer
-from ..models.policy.spec import N_ENV_SHAPES, N_PITCH_BINS, N_VOICES
+from ..models.policy.spec import N_ENV_SHAPES, N_PITCH_BINS, N_VOICES, N_VOL_LEVELS
 from .render import Sample, pair_to_sample, render_samples
 from .warmstart_loss import WarmstartWeights, warmstart_loss
 
 Batch = tuple[torch.Tensor, dict[str, torch.Tensor], torch.Tensor]
 
-_VOICE_KEYS = ("volume", "tone", "noise", "env_use")
+_VOICE_KEYS = ("tone", "noise", "env_use")
 _FRAME_KEYS = ("noise_pitch", "env_rate", "env_retrig")
 
 # ``pair_to_sample`` is imported from .render and re-exported here for existing call sites/tests.
@@ -43,6 +43,7 @@ def collate(samples: list[Sample], device: str = "cpu") -> Batch:
     voice = {k: np.zeros((batch, N_VOICES, max_t), np.float32) for k in _VOICE_KEYS}
     frame = {k: np.zeros((batch, max_t), np.float32) for k in _FRAME_KEYS}
     pitch_bin = np.full((batch, N_VOICES, max_t), (N_PITCH_BINS - 1) // 2, np.int64)
+    volume_level = np.zeros((batch, N_VOICES, max_t), np.int64)  # padding ⇒ DAC level 0 (silent)
     env_shape = np.zeros((batch, max_t), np.int64)
     # env_rate must be positive everywhere (loss takes log); fill padding with 1.0 Hz.
     frame["env_rate"][:] = 1.0
@@ -56,6 +57,7 @@ def collate(samples: list[Sample], device: str = "cpu") -> Batch:
         for k in _FRAME_KEYS:
             frame[k][b, :t] = tgt[k]
         pitch_bin[b, :, :t] = tgt["pitch_bin"]
+        volume_level[b, :, :t] = tgt["volume_level"]
         env_shape[b, :t] = tgt["env_shape"]
 
     targets: dict[str, torch.Tensor] = {}
@@ -64,9 +66,11 @@ def collate(samples: list[Sample], device: str = "cpu") -> Batch:
     for k in _FRAME_KEYS:
         targets[k] = torch.from_numpy(frame[k]).to(device)
     targets["pitch_bin"] = torch.from_numpy(pitch_bin).to(device)
+    targets["volume_level"] = torch.from_numpy(volume_level).to(device)
     targets["env_shape"] = torch.from_numpy(env_shape).to(device)
     assert targets["env_shape"].max().item() < N_ENV_SHAPES
     assert targets["pitch_bin"].max().item() < N_PITCH_BINS
+    assert targets["volume_level"].max().item() < N_VOL_LEVELS
     return torch.from_numpy(x).to(device), targets, torch.from_numpy(pad).to(device)
 
 

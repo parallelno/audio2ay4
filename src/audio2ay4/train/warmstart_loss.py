@@ -24,8 +24,6 @@ import torch.nn.functional as F
 from ..models.policy.spec import (
     ENV_RATE_FLOOR_HZ,
     N_VOICES,
-    VOL_CEIL_DB,
-    VOL_FLOOR_DB,
 )
 
 
@@ -81,8 +79,11 @@ def _best_voice_perm(
     idx = bins.unsqueeze(1).unsqueeze(3).expand(b, v, v, 1, t)    # (B, Vp, Vt, 1, T)
     ce = -logp.unsqueeze(2).expand(b, v, v, k, t).gather(3, idx).squeeze(3)  # (B, Vp, Vt, T)
 
-    dvol = VOL_FLOOR_DB + (VOL_CEIL_DB - VOL_FLOOR_DB) * torch.sigmoid(heads["volume"])
-    vol_se = (dvol.unsqueeze(2) - targets["volume"].unsqueeze(1)) ** 2       # (B, Vp, Vt, T)
+    vlogp = F.log_softmax(heads["volume_logits"], dim=2)          # (B, Vp, L, T)
+    levels = targets["volume_level"]                              # (B, Vt, T)
+    lvl = heads["volume_logits"].shape[2]
+    vidx = levels.unsqueeze(1).unsqueeze(3).expand(b, v, v, 1, t)  # (B, Vp, Vt, 1, T)
+    vol_ce = -vlogp.unsqueeze(2).expand(b, v, v, lvl, t).gather(3, vidx).squeeze(3)  # (B,Vp,Vt,T)
 
     def _pair_bce(logit_key: str, tgt_key: str) -> torch.Tensor:
         lo = heads[logit_key].unsqueeze(2).expand(b, v, v, t)
@@ -96,7 +97,7 @@ def _best_voice_perm(
 
     cost = (
         w.pitch * pitch_mask * ce
-        + w.volume * vol_mask * vol_se
+        + w.volume * vol_mask * vol_ce
         + pad_ij * (w.tone * _pair_bce("tone_logit", "tone")
                     + w.noise * _pair_bce("noise_logit", "noise")
                     + w.env_use * _pair_bce("env_use_logit", "env_use"))
@@ -126,15 +127,15 @@ def warmstart_loss(
         perm = _best_voice_perm(heads, targets, pad_mask, w)         # (B, V) target voice indices
     gather_idx = perm.unsqueeze(-1).expand(-1, -1, pad_mask.shape[1])  # (B, V, T)
     pt = dict(targets)
-    for key in ("pitch_bin", "volume", "tone", "noise", "env_use"):
+    for key in ("pitch_bin", "volume_level", "tone", "noise", "env_use"):
         pt[key] = targets[key].gather(1, gather_idx)
 
     pad1 = pad_mask.unsqueeze(1)                         # (B, 1, T) → broadcast over voices
     tone_t = pt["tone"]
     audible = torch.maximum(tone_t, pt["noise"])         # voice contributes sound
 
-    # Continuous heads decoded exactly as at inference; pitch is a per-voice classification.
-    dvol = VOL_FLOOR_DB + (VOL_CEIL_DB - VOL_FLOOR_DB) * torch.sigmoid(heads["volume"])
+    # Continuous shared heads decoded exactly as at inference; pitch and volume are per-voice
+    # classifications (over semitone bins / DAC levels).
     drate = ENV_RATE_FLOOR_HZ + F.softplus(heads["env_rate"].squeeze(1))
     np_pred = torch.sigmoid(heads["noise_pitch"].squeeze(1))
 
@@ -142,14 +143,17 @@ def warmstart_loss(
     vol_mask = audible * (1.0 - pt["env_use"]) * pad1
     env_active = targets["env_retrig"] * pad_mask        # (B, T) — shared head, no permutation
 
-    # Cross-entropy over pitch bins: logits (B, V, K, T) → (B, K, V, T) for ``cross_entropy``.
+    # Cross-entropy over pitch bins / volume levels: logits (B, V, C, T) → (B, C, V, T).
     pitch_ce = F.cross_entropy(
         heads["pitch_logits"].permute(0, 2, 1, 3), pt["pitch_bin"], reduction="none"
+    )                                                    # (B, V, T)
+    volume_ce = F.cross_entropy(
+        heads["volume_logits"].permute(0, 2, 1, 3), pt["volume_level"], reduction="none"
     )                                                    # (B, V, T)
 
     parts: dict[str, torch.Tensor] = {
         "pitch": (pitch_mask * pitch_ce).sum() / pitch_mask.sum().clamp(min=1.0),
-        "volume": _masked_mse(dvol, pt["volume"], vol_mask),
+        "volume": (vol_mask * volume_ce).sum() / vol_mask.sum().clamp(min=1.0),
         "tone": _masked_bce(heads["tone_logit"], tone_t, pad1.expand_as(tone_t)),
         "noise": _masked_bce(heads["noise_logit"], pt["noise"], pad1.expand_as(tone_t)),
         "env_use": _masked_bce(heads["env_use_logit"], pt["env_use"], pad1.expand_as(tone_t)),

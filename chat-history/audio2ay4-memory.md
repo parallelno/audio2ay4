@@ -15,11 +15,15 @@ Audio (mp3/wav/...) → AY-3-8910/YM2149 register stream (.ym) + audio preview.
 - Augmentation in data/ should mimic Suno coloration (stereo→mono, reverb, EQ, lossy MP3 codec, limiting) to bridge YM-render → Suno gap.
 - Real-task eval set = a few SUNO chiptune clips (NOT real instruments). Two ML plans in `design/`: Plan A = RL reverse player, Plan B = conditional diffusion. Milestone 0 skeleton implemented.
 
-## Environment / commands (Windows, pwsh)
-- Default `python` is 2.7 — DO NOT use. Use `py -3.11` (3.11.0 available).
-- Venv: `.venv` at repo root. Run tools via `.\.venv\Scripts\python.exe` / `.\.venv\Scripts\audio2ay4.exe`.
-- Install: `py -3.11 -m venv .venv; .\.venv\Scripts\python.exe -m pip install -e ".[dev]"`
-- Tests: `.\.venv\Scripts\python.exe -m pytest -q` (8 tests, all pass with audio2ay3 installed; 1 skips without it).
+## Environment / commands (Windows, pwsh) — NEW WORKING MACHINE (2026-06)
+- Migrated to a NEW machine. No `py` launcher; no system Python (only MS Store alias stubs).
+- Python 3.12.10 installed via `winget install --id Python.Python.3.12 -e --scope user` → `%LOCALAPPDATA%\Programs\Python\Python312\python.exe`.
+- Venv: `.venv` at repo root (Python 3.12.10). Run tools via `.\.venv\Scripts\python.exe` / `.\.venv\Scripts\audio2ay4.exe`.
+- Recreate venv: `& "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m venv .venv`
+- Install order used (all OK): `pip install -e ".[dev]"`; `pip install -e ".[audio]"`; `pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu`; `pip install -e ".[ay3]"`.
+- Installed versions: torch 2.12.1+cpu, torchaudio 2.11.0+cpu, numpy 2.4.6 (numba/audio2ay3 pins <2.5 → downgraded from 2.5.0), soundfile 0.14.0, audio2ay3 0.1.0 (numba 0.65.1, llvmlite 0.47.0).
+- NOTE: pwsh chains the venv path oddly if a `cd` precedes it on the same line; prefer `Set-Location <repo>` first OR call python by absolute path.
+- Tests: `.\.venv\Scripts\python.exe -m pytest` → 30 passed in ~6s (incl. audio2ay3-backed pairing). `ruff check src tests` clean.
 
 ## audio2ay3 reuse (the proven emulator — do NOT reinvent)
 - Local checkout: `d:\Work\Programming\audio2ay3`. Install editable: `pip install -e d:\Work\Programming\audio2ay3`.
@@ -49,10 +53,10 @@ Audio (mp3/wav/...) → AY-3-8910/YM2149 register stream (.ym) + audio preview.
 ## Verified end-to-end
 1s tone.wav → 50-frame YM @50Hz → 1s preview.wav, validate=LEGAL. `eval` on a tone → spec_dist/stability/legal table. Works.
 
-## HARDWARE CONSTRAINT (this machine)
-- This PC has a BROKEN CPU → native code (audio2ay3 LHA depack / emulator render) can hard-segfault (exit 1, no Python traceback). NOT a data-corruption bug. IGNORE such crashes locally.
-- Do NOT validate/render the corpus by reading .ym here (e.g. scan_corpus over all files crashes mid-scan). All heavy training/testing runs on a SECOND machine.
-- Example: `corpus/ym/- unknown/39kshock.ym` is a VALID LHA (header `\x1f\xed-lh5-`, contains 39KBS.BIN) yet crashes read_ym here — CPU fault, file is fine.
+## HARDWARE CONSTRAINT — RESOLVED (new machine, 2026-06)
+- The OLD working machine had a BROKEN CPU that segfaulted native code (audio2ay3 LHA depack / emulator render). That machine is GONE.
+- The NEW working machine is healthy: native code runs fine (audio2ay3-backed pairing tests pass, full render OK). Safe to validate/render the corpus locally now.
+- Historical note (no longer applies): `corpus/ym/- unknown/39kshock.ym` is a VALID LHA that used to crash read_ym on the old broken CPU — the file was always fine.
 
 ## Corpus — DOWNLOADED (Modland YM)
 - Downloader: `scripts/download_modland_ym.py` (stdlib-only, threaded, resume/skip-existing, atomic .part, retries+backoff, failures→corpus/ym/_failures.log). Default list = `scripts/modland_ym.txt` (resolved next to script).
@@ -148,9 +152,21 @@ Audio (mp3/wav/...) → AY-3-8910/YM2149 register stream (.ym) + audio preview.
 - CAUTION: val gain rate collapsed after step 5000 (115→111 over 1500 steps) while train avg fell 90→75 = ONSET OF OVERFIT, started while LR still 1e-4 (not just schedule). Gap train75/val113. The ceiling is now VOLUME generalization, not optimization. More steps (50k) will overfit volume further, val maybe ~105 floor.
 - NEXT LEVER (highest, cheap, loss-only/no-rerender): VOLUME → classification, mirror pitch fix. DAC is 4-bit/16 levels → regressing dB is wrong objective. Softmax over 16 DAC levels should close volume generalization gap like pitch did. THEN CQT for pitch<2 (re-render). Optional: small weight_decay/dropout to slow volume overfit.
 
+## Plan A — A2 volume head: regression → DAC-level classification (DONE)
+- Rationale (from v3): volume MSE was ~85% of weighted loss and the val ceiling = volume *generalization*. The AY DAC is 4-bit/16 discrete levels, so regressing a continuous dB collapses to the corpus mean (same failure pitch had). Switched volume to softmax over the 16 DAC levels.
+- spec.py: added `N_VOL_LEVELS=16` + thin wrappers `db_to_vol_level`/`vol_level_to_db` that re-export the compiler's canonical `repr.compile.db_to_level`/`level_to_db` (single source of truth for the dB↔level amplitude table `_AY_AMP`). spec.py now imports `from ...repr.compile import db_to_level, level_to_db` — still torch-free (compile is numpy-only); no import cycle (repr never imports models). Verified worker path `import audio2ay4.train.render` still torch-free.
+- network.py: `head_volume` → `Conv1d(hidden, N_VOICES*N_VOL_LEVELS)`; forward emits `volume_logits` (B,3,16,T) via view (was `volume` (B,3,T)). docstring updated.
+- targets.py: emits `volume_level` (3,T) int64 via `db_to_vol_level(v.volume_db)` (handles -inf→0); default fill = `db_to_vol_level(VOL_FLOOR_DB)` = 0. Dropped continuous `volume`/VOL_CEIL clamp. Return key `volume`→`volume_level`.
+- warmstart.py collate: removed `volume` from `_VOICE_KEYS`; added int64 `volume_level` path (padding fill 0) mirroring `pitch_bin`; assert max<N_VOL_LEVELS.
+- warmstart_loss.py: volume term now masked CE over levels (`F.cross_entropy(volume_logits.permute(0,2,1,3), volume_level)`), same vol_mask (audible & ~env_use & pad). PIT cost matrix volume term: SE→CE via log_softmax+gather (mirrors pitch ce). Permuted-gather key list `volume`→`volume_level`. Removed VOL_FLOOR/VOL_CEIL imports. parts key still `"volume"` (now CE nats; random≈ln(16)≈2.77).
+- core.py _decode: volume = argmax(volume_logits,axis=1)→level→dB via module-level `_LEVEL_DB` lookup. Level 0 clamped to finite VOL_FLOOR_DB (so an *audible* voice never carries -inf; compiler maps floor back to level 0). `_sigmoid` kept (still used by noise_pitch).
+- tests: test_policy_rl head_shapes drops `volume`, asserts `volume_logits` (2,3,N_VOL_LEVELS,17). test_train_warmstart: build_targets+collate assert `volume_level` shape/dtype/range; invariance test rolls `volume_level` (was `volume`).
+- IMPORTANT: checkpoints already incompatible (prior pitch head change); volume head shape change (3→48 outputs) reinforces that — retrain FRESH. Render CACHE still valid (stores feats+regs; targets rebuilt in pair_to_sample), so NO re-render.
+- 30 tests pass, ruff clean, render import torch-free verified.
+
 ## Decision log (latest)
-- Q: run full 50K warm-start now? A: NO. The 8k run already exposed the ceiling (volume generalization). 50k of the same recipe mostly overfits volume; val would floor ~105. Do the volume→classification fix FIRST (loss-only, reuses cache), THEN run long.
-- NEXT ACTION when picked up: implement volume → 16-level DAC classification (mirror the pitch change): spec.py N_VOL_LEVELS=16 + db<->dac helpers; network.py head_volume → Conv1d(hidden, N_VOICES*16) reshape (B,3,16,T) `volume_logits`; targets.py+warmstart.py emit `volume_level` int64; warmstart_loss.py volume term → masked CE + update PIT cost matrix to score volume by CE; core.py _decode argmax→dB; update tests. Old checkpoints already incompatible → retrain fresh, cache still valid (no re-render).
+- Q: run full 50K warm-start now? A: volume→classification fix is now DONE (loss/head only, reuses cache). Recommended next run on a machine with the corpus: `audio2ay4 train rl --corpus corpus/ym --max-steps 50000 --batch-size 64 --lr 3e-4` (fresh checkpoint). Watch `avg`/`val` fall; want pitch CE <2 and volume CE well below ln(16)≈2.77. If volume CE drops but pitch CE still floors ~2.6 → next lever = CQT features (changes cfg_key → full re-render).
+- NEXT ACTION when picked up: run the long warm-start (above) and read the per-head log. Old NEXT ACTION (implement volume→16-level DAC classification) is COMPLETE.
 
 ## NOT yet done (next options)
 - A3: chip/diff differentiable emulator (DDSP square+noise+env, validate vs trusted emulator). A4: Regime-1 reward training (analysis-by-synthesis, eval.spectral_distance + embedding + chroma/onset). A5: real/augmented (Suno) reward phase + jitter/idiomatic regularizers. A6: optional PPO.

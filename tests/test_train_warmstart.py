@@ -41,6 +41,9 @@ def test_build_targets_shapes():
     assert t["pitch_bin"].shape == (3, 20)
     assert t["pitch_bin"].dtype == np.int64
     assert 0 <= t["pitch_bin"].min() and t["pitch_bin"].max() < 61
+    assert t["volume_level"].shape == (3, 20)
+    assert t["volume_level"].dtype == np.int64
+    assert 0 <= t["volume_level"].min() and t["volume_level"].max() < 16
     assert t["env_shape"].shape == (20,)
     assert t["env_shape"].dtype == np.int64
     assert 0 <= t["env_shape"].min() and t["env_shape"].max() < 16
@@ -54,6 +57,8 @@ def test_collate_pads_variable_lengths():
     assert pad[0].sum().item() == 12 and pad[1].sum().item() == 18
     assert targets["pitch_bin"].shape == (2, 3, 18)
     assert targets["pitch_bin"].dtype == torch.int64
+    assert targets["volume_level"].shape == (2, 3, 18)
+    assert targets["volume_level"].dtype == torch.int64
     assert targets["env_shape"].shape == (2, 18)
 
 
@@ -100,7 +105,7 @@ def test_warmstart_loss_invariant_to_voice_relabelling():
         heads = net(x)
         base, _ = warmstart_loss(heads, targets, pad)
         rolled = dict(targets)
-        for k in ("pitch_bin", "volume", "tone", "noise", "env_use"):
+        for k in ("pitch_bin", "volume_level", "tone", "noise", "env_use"):
             rolled[k] = torch.roll(targets[k], shifts=1, dims=1)  # relabel A→B→C→A
         permuted, _ = warmstart_loss(heads, rolled, pad)
     assert permuted.item() == pytest.approx(base.item(), rel=1e-5, abs=1e-4)

@@ -23,13 +23,20 @@ from .network import ReversePlayer
 from .spec import (
     ENV_RATE_FLOOR_HZ,
     N_VOICES,
+    N_VOL_LEVELS,
     PITCH_BIN_WIDTH,
     PITCH_MIN,
-    VOL_CEIL_DB,
     VOL_FLOOR_DB,
+    vol_level_to_db,
 )
 
 _SILENT = AYVoiceFrame(pitch_semitones=float("nan"), volume_db=float("-inf"), tone_on=False)
+
+# DAC level → dB lookup; level 0 (silence) is clamped to the finite floor so an *audible* voice
+# never carries a non-finite volume (the compiler maps the floor straight back to level 0).
+_LEVEL_DB = np.array(
+    [VOL_FLOOR_DB] + [vol_level_to_db(i) for i in range(1, N_VOL_LEVELS)], dtype=np.float32
+)
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
@@ -94,7 +101,8 @@ def _decode(h: dict[str, np.ndarray], n_frames: int) -> AYState:
     """Map raw head arrays → a finite, legal ``AYState`` of length ``n_frames``."""
     pitch_bin = np.argmax(h["pitch_logits"], axis=1)                         # (3, T) over K bins
     pitch = PITCH_MIN + pitch_bin.astype(np.float32) * PITCH_BIN_WIDTH        # (3, T) semitones
-    volume = VOL_FLOOR_DB + (VOL_CEIL_DB - VOL_FLOOR_DB) * _sigmoid(h["volume"])
+    vol_level = np.argmax(h["volume_logits"], axis=1)                        # (3, T) over L levels
+    volume = _LEVEL_DB[vol_level]                                            # (3, T) dB
     tone_on = h["tone_logit"] > 0.0
     noise_on = h["noise_logit"] > 0.0
     env_use = h["env_use_logit"] > 0.0

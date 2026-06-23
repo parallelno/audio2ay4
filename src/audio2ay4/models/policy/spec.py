@@ -7,6 +7,8 @@ free of torch so the deterministic core and the target builder import without th
 
 from __future__ import annotations
 
+from ...repr.compile import db_to_level, level_to_db
+
 N_VOICES = 3
 N_ENV_SHAPES = 16
 
@@ -36,3 +38,20 @@ def pitch_to_bin(semitones: float) -> int:
 def bin_to_pitch(b: int) -> float:
     """Inverse of :func:`pitch_to_bin`: bin index → semitones (bin centre)."""
     return PITCH_MIN + b * PITCH_BIN_WIDTH
+
+
+# Volume is predicted as a classification over the 4-bit DAC's 16 amplitude levels (not regressed
+# in dB): the AY DAC is quantised to 16 discrete steps, so regressing a continuous dB collapses to
+# the corpus mean exactly like the raw pitch head did. The dB↔level mapping is the compiler's
+# canonical amplitude table (single source of truth); decode picks the arg-max level → dB.
+N_VOL_LEVELS = 16  # 4-bit AY DAC amplitude levels (0..15)
+
+
+def db_to_vol_level(db: float) -> int:
+    """Perceptual dB → nearest 4-bit DAC level index in ``[0, N_VOL_LEVELS)`` (compiler table)."""
+    return db_to_level(db)
+
+
+def vol_level_to_db(level: int) -> float:
+    """Inverse: DAC level index → dB via the compiler's amplitude table (level 0 ⇒ ``-inf``)."""
+    return level_to_db(level)
