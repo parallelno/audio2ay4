@@ -1,4 +1,4 @@
-# audio2ay4 — repo facts (verified )
+# audio2ay4 — repo facts (verified)
 
 > Snapshot of the assistant's **repository memory** for this project, exported so it travels with
 > the git checkout. On the new machine, paste this back into repo memory (see
