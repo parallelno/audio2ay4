@@ -110,7 +110,10 @@ def _cmd_train(args: argparse.Namespace) -> int:
         ym_paths = ym_paths[: args.limit]
 
     run = _cfg(args)
-    run = replace(run, core="rl", extra={**run.extra, **({"checkpoint": args.out} if args.out else {})})
+    reg = {"weight_decay": args.weight_decay, "dropout": args.dropout, "feat_noise": args.feat_noise}
+    run = replace(run, core="rl", extra={
+        **run.extra, **reg, **({"checkpoint": args.out} if args.out else {})
+    })
     train_cfg = TrainConfig(
         plan="rl", run=run, batch_size=args.batch_size, lr=args.lr,
         max_steps=args.max_steps, corpus_dir=args.corpus, cache_dir=args.cache_dir,
@@ -151,6 +154,12 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--max-steps", type=int, default=2000)
     t.add_argument("--val-frac", type=float, default=0.05,
                    help="fraction of tunes held out for validation loss (0 = none)")
+    t.add_argument("--weight-decay", type=float, default=0.01,
+                   help="AdamW weight decay (L2 regularization; 0 = off)")
+    t.add_argument("--dropout", type=float, default=0.1,
+                   help="dropout in the TCN residual blocks (0 = off)")
+    t.add_argument("--feat-noise", type=float, default=0.0,
+                   help="train-time Gaussian feature jitter, in units of the feature std (0 = off)")
     t.add_argument("--window", type=int, default=512,
                    help="train on random N-frame windows (0 = whole songs; slower)")
     t.add_argument("--workers", type=int, default=0,

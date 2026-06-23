@@ -179,7 +179,20 @@ Audio (mp3/wav/...) → AY-3-8910/YM2149 register stream (.ym) + audio preview.
 ## Decision log (latest)
 - volume→classification: DONE and VALIDATED on real 50k run (volume CE 1.45 << 2.77 random; pitch also improved to 1.30). The v3 "volume ceiling" is broken.
 - NEXT LEVERS (pick when picked up): (1) shrink the train/val gap (val 8.57 vs train 4.2) — add small weight_decay/dropout or more data aug; (2) CQT features for pitch CE<1 (changes data/pairing cfg_key → FULL re-render); (3) tame env_rate loss noise (rare-frame, log-space) — maybe lower its weight or classify env period. (4) Then A3/A4 differentiable-emulator reward.
-- To use v4 core at inference: RunConfig(core='rl', extra={'checkpoint':'checkpoints/warmstart_rl_v4.pt'}). Try `audio2ay4 convert <suno.mp3> out.ym --core rl` (need extra wiring for checkpoint via CLI — not yet a flag) or eval.
+- To use v4 core at inference: RunConfig(core='rl', extra={'checkpoint':'checkpoints/warmstart_rl_v4.pt'}). CLI now has the flag (see below).
+
+## Plan A — A2 CLI checkpoint flag (DONE)
+- `_add_common` (convert/preview/eval/train) now takes `--checkpoint <.pt>` + `--hidden N` (default 128); `_cfg(args)` packs them into `RunConfig.extra` (RLCore reads `extra['checkpoint']`/`extra['hidden']`). Use trained core: `audio2ay4 convert in.wav out.ym --core rl --checkpoint checkpoints/warmstart_rl_v4.pt`.
+- Verified: convert samples/short/02 → 150-frame LEGAL YM. `eval samples/short` rl(v4) vs dummy: spec_dist 0.142 vs 0.210, stability 0.683 vs 0.455, both legality 1.0 → warm-start beats baseline on real audio.
+
+## Plan A — A2 LEVER 1: regularization to shrink train/val gap (DONE, loss-only/no-rerender)
+- Motivation: v4 had val 8.57 vs train 4.20 (~2x overfit). Added three regularizers, all checkpoint-compatible (no head-shape change; cache reused):
+  * **dropout** in `network.py` `_ResidualBlock` (nn.Dropout after each act) + `ReversePlayer(dropout=0.0)` param. Dropout has NO params → state_dict unchanged → old/new checkpoints interchangeable; eval() disables it at inference.
+  * **weight_decay**: optimizer `Adam`→`AdamW(weight_decay=...)` in `train_warmstart`.
+  * **feat_noise** aug: `_augment_feats(batch, noise)` adds `noise * x.std() * randn_like(x)` to the model INPUT only (train batches; not val, not targets) — label-preserving, scale-robust.
+- Wiring: `train_warmstart` reads `run.extra['dropout'|'weight_decay'|'feat_noise']` (defaults 0.0). Banner prints `reg: dropout D, wd W, feat_noise F`. CLI `train` flags `--weight-decay` (default 0.01), `--dropout` (default 0.1), `--feat-noise` (default 0.0=opt-in); `_cmd_train` packs them into run.extra.
+- Verified: smoke `train rl --max-steps 5 --limit 80 --weight-decay 0.01 --dropout 0.1 --feat-noise 0.05` ran on cuda (cache hit), banner+loop+save OK. 30 tests pass, ruff clean.
+- NEXT: run a real 50k with these defaults (try also `--feat-noise 0.05`) → compare val gap vs v4 (8.57). Tune dropout/wd if underfit/overfit. THEN lever 3 (env_rate noise) and lever 2 (CQT, needs re-render).
 
 ## NOT yet done (next options)
 - A3: chip/diff differentiable emulator (DDSP square+noise+env, validate vs trusted emulator). A4: Regime-1 reward training (analysis-by-synthesis, eval.spectral_distance + embedding + chroma/onset). A5: real/augmented (Suno) reward phase + jitter/idiomatic regularizers. A6: optional PPO.

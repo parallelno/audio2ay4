@@ -114,6 +114,17 @@ def _crop(sample: Sample, window: int | None, rng: np.random.Generator) -> Sampl
     return feats[s:e], cropped
 
 
+def _augment_feats(batch: Batch, noise: float) -> Batch:
+    """Add Gaussian jitter (scaled by the batch feature std) to the model input only.
+
+    A cheap, label-preserving augmentation: it perturbs the audio features without touching the
+    register targets, so the warm-start sees more input variety and overfits the corpus less.
+    """
+    x, targets, pad_mask = batch
+    x = x + noise * x.std() * torch.randn_like(x)
+    return x, targets, pad_mask
+
+
 def _lr_at(step: int, base_lr: float, max_steps: int, warmup: int) -> float:
     """Linear warmup for ``warmup`` steps, then cosine decay to ~0 by ``max_steps``."""
     if step < warmup:
@@ -177,8 +188,11 @@ def train_warmstart(
     torch.manual_seed(run.seed)
     rng = np.random.default_rng(run.seed)
     hidden = int(run.extra.get("hidden", 128))
-    net = ReversePlayer(in_dim=dim, hidden=hidden).to(device)
-    opt = torch.optim.Adam(net.parameters(), lr=train_cfg.lr)
+    dropout = float(run.extra.get("dropout", 0.0))
+    weight_decay = float(run.extra.get("weight_decay", 0.0))
+    feat_noise = float(run.extra.get("feat_noise", 0.0))
+    net = ReversePlayer(in_dim=dim, hidden=hidden, dropout=dropout).to(device)
+    opt = torch.optim.AdamW(net.parameters(), lr=train_cfg.lr, weight_decay=weight_decay)
     weights = WarmstartWeights()
 
     # Hold out whole tunes for an honest convergence signal (per-step train loss is very noisy).
@@ -192,7 +206,8 @@ def train_warmstart(
     print(
         f"Training on {device}: {len(train_samples)} train / {len(val_samples)} val tunes "
         f"| batch {bs} | window {window or 'full'} | {train_cfg.max_steps} steps "
-        f"| lr {base_lr:.1e} (warmup {warmup}, cosine)",
+        f"| lr {base_lr:.1e} (warmup {warmup}, cosine) "
+        f"| reg: dropout {dropout:.2f}, wd {weight_decay:.1e}, feat_noise {feat_noise:.2f}",
         flush=True,
     )
 
@@ -204,6 +219,8 @@ def train_warmstart(
             g["lr"] = lr
         idx = rng.choice(len(train_samples), size=bs, replace=len(train_samples) < bs)
         batch = collate([_crop(train_samples[i], window, rng) for i in idx], device=device)
+        if feat_noise > 0.0:
+            batch = _augment_feats(batch, feat_noise)
         total, parts = train_step(net, opt, batch, weights)
         ema = total if ema is None else 0.98 * ema + 0.02 * total
         if step <= 3 or step % log_every == 0 or step == train_cfg.max_steps:

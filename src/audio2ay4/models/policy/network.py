@@ -24,7 +24,8 @@ from .spec import N_ENV_SHAPES, N_PITCH_BINS, N_VOICES, N_VOL_LEVELS
 class _ResidualBlock(nn.Module):
     """Non-causal dilated residual block (symmetric padding keeps the time length fixed)."""
 
-    def __init__(self, channels: int, dilation: int, kernel_size: int = 3, groups: int = 8) -> None:
+    def __init__(self, channels: int, dilation: int, kernel_size: int = 3, groups: int = 8,
+                 dropout: float = 0.0) -> None:
         super().__init__()
         pad = dilation * (kernel_size - 1) // 2  # symmetric ⇒ non-causal, length-preserving
         g = groups if channels % groups == 0 else 1
@@ -33,10 +34,13 @@ class _ResidualBlock(nn.Module):
         self.conv2 = nn.Conv1d(channels, channels, kernel_size, padding=pad, dilation=dilation)
         self.norm2 = nn.GroupNorm(g, channels)
         self.act = nn.GELU()
+        self.drop = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # (B, C, T) -> (B, C, T)
         y = self.act(self.norm1(self.conv1(x)))
+        y = self.drop(y)
         y = self.act(self.norm2(self.conv2(y)))
+        y = self.drop(y)
         return x + y
 
 
@@ -61,12 +65,14 @@ class ReversePlayer(nn.Module):
         hidden: int = 128,
         dilations: tuple[int, ...] = (1, 2, 4, 8, 1, 2, 4, 8),
         kernel_size: int = 3,
+        dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self.in_dim = in_dim
         self.in_proj = nn.Conv1d(in_dim, hidden, kernel_size=1)
         self.blocks = nn.ModuleList(
-            _ResidualBlock(hidden, dilation=d, kernel_size=kernel_size) for d in dilations
+            _ResidualBlock(hidden, dilation=d, kernel_size=kernel_size, dropout=dropout)
+            for d in dilations
         )
         # Per-frame heads.
         self.head_pitch = nn.Conv1d(hidden, N_VOICES * N_PITCH_BINS, 1)
