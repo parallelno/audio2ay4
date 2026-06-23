@@ -47,7 +47,9 @@ def test_build_targets_shapes():
     assert t["env_shape"].shape == (20,)
     assert t["env_shape"].dtype == np.int64
     assert 0 <= t["env_shape"].min() and t["env_shape"].max() < 16
-    assert (t["env_rate"] > 0).all()  # log() in the loss needs strictly positive rates
+    assert t["env_rate_bin"].shape == (20,)
+    assert t["env_rate_bin"].dtype == np.int64
+    assert 0 <= t["env_rate_bin"].min() and t["env_rate_bin"].max() < 48
 
 
 def test_collate_pads_variable_lengths():
@@ -60,6 +62,8 @@ def test_collate_pads_variable_lengths():
     assert targets["volume_level"].shape == (2, 3, 18)
     assert targets["volume_level"].dtype == torch.int64
     assert targets["env_shape"].shape == (2, 18)
+    assert targets["env_rate_bin"].shape == (2, 18)
+    assert targets["env_rate_bin"].dtype == torch.int64
 
 
 def test_crop_windows_long_and_keeps_short():

@@ -7,6 +7,8 @@ free of torch so the deterministic core and the target builder import without th
 
 from __future__ import annotations
 
+import math
+
 from ...repr.compile import db_to_level, level_to_db
 
 N_VOICES = 3
@@ -55,3 +57,29 @@ def db_to_vol_level(db: float) -> int:
 def vol_level_to_db(level: int) -> float:
     """Inverse: DAC level index → dB via the compiler's amplitude table (level 0 ⇒ ``-inf``)."""
     return level_to_db(level)
+
+
+# Envelope rate (R11/R12 period → Hz) spans a huge dynamic range (~0.1 Hz to several kHz) and only a
+# few frames per tune (re)write it, so a log-MSE regression is extremely noisy (its masked loss
+# swings wildly batch-to-batch). Classify it over a log-spaced grid instead — the same fix that
+# stabilised pitch/volume — giving a bounded cross-entropy with no blow-ups. Decode picks the
+# arg-max bin centre (a representative Hz the compiler maps back to a period register).
+ENV_RATE_MIN_HZ = ENV_RATE_FLOOR_HZ            # 0.1 Hz (matches the decode floor)
+ENV_RATE_MAX_HZ = 8000.0                       # ~AY envelope step-rate ceiling at typical clocks
+N_ENV_RATE_BINS = 48
+_ENV_RATE_LOG_MIN = math.log(ENV_RATE_MIN_HZ)
+_ENV_RATE_LOG_MAX = math.log(ENV_RATE_MAX_HZ)
+
+
+def env_rate_to_bin(hz: float) -> int:
+    """Quantise an envelope rate (Hz) to its nearest log-spaced bin in ``[0, N_ENV_RATE_BINS)``."""
+    hz = min(max(hz, ENV_RATE_MIN_HZ), ENV_RATE_MAX_HZ)
+    frac = (math.log(hz) - _ENV_RATE_LOG_MIN) / (_ENV_RATE_LOG_MAX - _ENV_RATE_LOG_MIN)
+    b = round(frac * (N_ENV_RATE_BINS - 1))
+    return int(min(max(b, 0), N_ENV_RATE_BINS - 1))
+
+
+def bin_to_env_rate(b: int) -> float:
+    """Inverse of :func:`env_rate_to_bin`: bin index → envelope rate in Hz (bin centre)."""
+    frac = b / (N_ENV_RATE_BINS - 1)
+    return math.exp(_ENV_RATE_LOG_MIN + frac * (_ENV_RATE_LOG_MAX - _ENV_RATE_LOG_MIN))

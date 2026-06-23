@@ -22,7 +22,6 @@ import torch
 import torch.nn.functional as F
 
 from ..models.policy.spec import (
-    ENV_RATE_FLOOR_HZ,
     N_VOICES,
 )
 
@@ -134,9 +133,8 @@ def warmstart_loss(
     tone_t = pt["tone"]
     audible = torch.maximum(tone_t, pt["noise"])         # voice contributes sound
 
-    # Continuous shared heads decoded exactly as at inference; pitch and volume are per-voice
-    # classifications (over semitone bins / DAC levels).
-    drate = ENV_RATE_FLOOR_HZ + F.softplus(heads["env_rate"].squeeze(1))
+    # Continuous shared heads decoded exactly as at inference; pitch, volume and the envelope rate
+    # are classifications (over semitone bins / DAC levels / log-spaced rate bins).
     np_pred = torch.sigmoid(heads["noise_pitch"].squeeze(1))
 
     pitch_mask = tone_t * pad1
@@ -158,7 +156,7 @@ def warmstart_loss(
         "noise": _masked_bce(heads["noise_logit"], pt["noise"], pad1.expand_as(tone_t)),
         "env_use": _masked_bce(heads["env_use_logit"], pt["env_use"], pad1.expand_as(tone_t)),
         "noise_pitch": _masked_mse(np_pred, targets["noise_pitch"], pad_mask),
-        "env_rate": _masked_mse(torch.log(drate), torch.log(targets["env_rate"]), env_active),
+        "env_rate": _masked_ce(heads["env_rate_logits"], targets["env_rate_bin"], env_active),
         "env_shape": _masked_ce(heads["env_shape"], targets["env_shape"], env_active),
         "env_retrig": _masked_bce(heads["env_retrig"].squeeze(1), targets["env_retrig"], pad_mask),
     }

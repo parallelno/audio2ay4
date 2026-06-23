@@ -21,12 +21,13 @@ from ...repr.state import AYGlobalFrame, AYState, AYStateFrame, AYVoiceFrame, Fe
 from ..base import register_core
 from .network import ReversePlayer
 from .spec import (
-    ENV_RATE_FLOOR_HZ,
+    N_ENV_RATE_BINS,
     N_VOICES,
     N_VOL_LEVELS,
     PITCH_BIN_WIDTH,
     PITCH_MIN,
     VOL_FLOOR_DB,
+    bin_to_env_rate,
     vol_level_to_db,
 )
 
@@ -38,14 +39,13 @@ _LEVEL_DB = np.array(
     [VOL_FLOOR_DB] + [vol_level_to_db(i) for i in range(1, N_VOL_LEVELS)], dtype=np.float32
 )
 
+# Envelope-rate bin → Hz lookup (decode picks the arg-max log-spaced bin centre).
+_ENV_RATE_HZ = np.array([bin_to_env_rate(i) for i in range(N_ENV_RATE_BINS)], dtype=np.float32)
+
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
     # Numerically stable logistic via tanh identity.
     return 0.5 * (1.0 + np.tanh(0.5 * x))
-
-
-def _softplus(x: np.ndarray) -> np.ndarray:
-    return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0.0)
 
 
 class RLCore:
@@ -107,7 +107,7 @@ def _decode(h: dict[str, np.ndarray], n_frames: int) -> AYState:
     noise_on = h["noise_logit"] > 0.0
     env_use = h["env_use_logit"] > 0.0
     noise_pitch = _sigmoid(h["noise_pitch"][0])                              # (T,)
-    env_rate = ENV_RATE_FLOOR_HZ + _softplus(h["env_rate"][0])
+    env_rate = _ENV_RATE_HZ[np.argmax(h["env_rate_logits"], axis=0)]          # (T,) Hz
     env_shape = np.argmax(h["env_shape"], axis=0).astype(int)                # (T,)
     env_retrig = h["env_retrig"][0] > 0.0
 
