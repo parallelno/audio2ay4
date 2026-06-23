@@ -21,8 +21,10 @@ from audio2ay4.models.policy.relax import controls_from_heads  # noqa: E402
 from audio2ay4.repr.compile import EP_MIN, NP_MIN, TP_MIN  # noqa: E402
 from audio2ay4.train.reward import (  # noqa: E402
     RewardWeights,
+    chroma_loss,
     jitter_penalty,
     multiscale_stft_loss,
+    onset_loss,
     reward_loss,
 )
 
@@ -166,6 +168,90 @@ def test_reward_loss_parts():
     total, parts = reward_loss(recon, recon.clone(), c, RewardWeights())
     assert set(parts) == {"spectral", "jitter"}
     assert parts["spectral"] == pytest.approx(0.0, abs=1e-5)
+
+
+# --------------------------------------------------------------------------------------------- #
+# Chroma (melody) + onset (rhythm) reward terms — the A.4 w3 term, validated against ears
+# --------------------------------------------------------------------------------------------- #
+
+def _sine(freq: float, n: int = 12_000) -> torch.Tensor:
+    t = torch.arange(n, dtype=torch.float32) / SR
+    return torch.sin(2.0 * torch.pi * freq * t)
+
+
+def _square(freq: float, n: int = 12_000) -> torch.Tensor:
+    return torch.sign(_sine(freq, n))
+
+
+def _pulsed(freq: float, period_s: float, n: int = 12_000) -> torch.Tensor:
+    """Tone gated on for the first half of each period — gives a clear onset envelope."""
+    env = ((torch.arange(n, dtype=torch.float32) / SR) % period_s < period_s / 2).float()
+    return _sine(freq, n) * env
+
+
+def test_chroma_loss_zero_on_identical():
+    x = _square(440.0)  # harmonics give real chroma energy
+    assert float(chroma_loss(x, x.clone(), SR)) == pytest.approx(0.0, abs=1e-4)
+
+
+def test_chroma_loss_timbre_invariant():
+    """Same note, different timbre must score far better than a tritone away."""
+    a = _sine(440.0)
+    same_note = _square(440.0)
+    tritone = _sine(440.0 * 2.0 ** (6.0 / 12.0))
+    assert float(chroma_loss(a, same_note, SR)) < float(chroma_loss(a, tritone, SR))
+
+
+def test_chroma_loss_octave_equivalent():
+    a = _sine(440.0)
+    octave = _sine(880.0)
+    tritone = _sine(440.0 * 2.0 ** (6.0 / 12.0))
+    assert float(chroma_loss(a, octave, SR)) < float(chroma_loss(a, tritone, SR))
+
+
+def test_chroma_loss_short_input_is_zero():
+    short = _sine(440.0, n=1000)  # < n_fft
+    assert float(chroma_loss(short, short.clone(), SR)) == 0.0
+
+
+def test_chroma_loss_differentiable():
+    a = _square(440.0).requires_grad_(True)
+    b = _square(440.0 * 2.0 ** (3.0 / 12.0))
+    loss = chroma_loss(a, b, SR)
+    loss.backward()
+    assert a.grad is not None and torch.isfinite(a.grad).all()
+    assert float(a.grad.abs().sum()) > 0.0
+
+
+def test_onset_loss_low_on_identical():
+    x = _pulsed(440.0, period_s=0.1)
+    assert float(onset_loss(x, x.clone(), SR)) == pytest.approx(0.0, abs=1e-4)
+
+
+def test_onset_loss_higher_on_mismatched_rhythm():
+    a = _pulsed(440.0, period_s=0.1)
+    same = _pulsed(440.0, period_s=0.1)
+    off = _pulsed(440.0, period_s=0.037)
+    assert float(onset_loss(a, off, SR)) > float(onset_loss(a, same, SR))
+
+
+def test_onset_loss_differentiable():
+    a = _pulsed(440.0, period_s=0.1).requires_grad_(True)
+    b = _pulsed(440.0, period_s=0.05)
+    loss = onset_loss(a, b, SR)
+    loss.backward()
+    assert a.grad is not None and torch.isfinite(a.grad).all()
+    assert float(a.grad.abs().sum()) > 0.0
+
+
+def test_reward_loss_includes_chroma_onset_when_weighted():
+    emu = _fast_emulator()
+    heads = _dummy_heads(b=1, t=12)
+    c = controls_from_heads(heads, float(MCLK))
+    recon = emu.render(c.select(0), MCLK, FRATE).unsqueeze(0)
+    weights = RewardWeights(spectral=1.0, jitter=0.0, chroma=1.0, onset=1.0)
+    _, parts = reward_loss(recon, recon.clone(), c, weights, sample_rate=SR)
+    assert {"spectral", "jitter", "chroma", "onset"} <= set(parts)
 
 
 # --------------------------------------------------------------------------------------------- #

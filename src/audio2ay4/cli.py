@@ -144,7 +144,8 @@ def _train_reward(args: argparse.Namespace, ym_paths: list[str]) -> int:
         plan="rl", run=run, batch_size=args.batch_size, lr=args.lr,
         max_steps=args.max_steps, corpus_dir=args.corpus, cache_dir=args.cache_dir,
     )
-    weights = RewardWeights(spectral=args.w_spec, jitter=args.w_jitter)
+    weights = RewardWeights(spectral=args.w_spec, jitter=args.w_jitter,
+                            chroma=args.w_chroma, onset=args.w_onset)
     ckpt = train_reward(
         train_cfg, ym_paths,
         init_checkpoint=(args.init or None),
@@ -209,6 +210,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="[reward] multi-scale spectral term weight")
     t.add_argument("--w-jitter", type=float, default=0.02,
                    help="[reward] control jitter (stability) penalty weight")
+    t.add_argument("--w-chroma", type=float, default=0.0,
+                   help="[reward] chroma (melody/harmony) loss weight — the headline term")
+    t.add_argument("--w-onset", type=float, default=0.0,
+                   help="[reward] onset (rhythm/timing) loss weight")
     t.add_argument("--tau", type=float, default=1.0,
                    help="[reward] soft-argmax temperature for the head relaxation")
     t.add_argument("--augment", action="store_true",

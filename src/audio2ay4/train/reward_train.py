@@ -33,7 +33,13 @@ from ..data.pairing import build_pair
 from ..models.policy.network import ReversePlayer
 from ..models.policy.relax import controls_from_heads
 from ..repr.state import AudioBuffer
-from .reward import RewardWeights, jitter_penalty, multiscale_stft_loss
+from .reward import (
+    RewardWeights,
+    chroma_loss,
+    jitter_penalty,
+    multiscale_stft_loss,
+    onset_loss,
+)
 
 # One reward example: features (T, dim), ground-truth registers (T, 16), and the chip clock/rate.
 RewardSample = tuple[np.ndarray, np.ndarray, int, int]
@@ -189,6 +195,15 @@ def reward_forward(
     jitter = jitter / max(1, len(samples))
     total = weights.spectral * spec + weights.jitter * jitter
     parts = {"spectral": float(spec.detach()), "jitter": float(jitter.detach())}
+    sr = run.sample_rate if run is not None else 44_100
+    if weights.chroma > 0.0:
+        chr_ = chroma_loss(recon_b, target_b, sr)
+        total = total + weights.chroma * chr_
+        parts["chroma"] = float(chr_.detach())
+    if weights.onset > 0.0:
+        ons = onset_loss(recon_b, target_b, sr)
+        total = total + weights.onset * ons
+        parts["onset"] = float(ons.detach())
     return total, parts
 
 
@@ -247,7 +262,8 @@ def train_reward(
         f"Reward-training on {device}: {len(samples)} tunes | batch {bs} "
         f"| window {window or 'full'} | {train_cfg.max_steps} steps "
         f"| lr {base_lr:.1e} (warmup {warmup}, cosine) "
-        f"| w_spec {weights.spectral:.2f} w_jit {weights.jitter:.3f} tau {tau:.2f} "
+        f"| w_spec {weights.spectral:.2f} w_jit {weights.jitter:.3f} "
+        f"w_chroma {weights.chroma:.2f} w_onset {weights.onset:.2f} tau {tau:.2f} "
         f"| augment {'on s=' + format(aug_strength, '.2f') if augment else 'off'} "
         f"| emu sr {run.sample_rate} x{oversample}, partials {max_partials}",
         flush=True,
