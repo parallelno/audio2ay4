@@ -25,11 +25,14 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import torch
 
+from .. import features
 from ..chip.diff import DiffAyEmulator, unpack_regs
 from ..config import RunConfig, TrainConfig
+from ..data.augment import augment_audio
 from ..data.pairing import build_pair
 from ..models.policy.network import ReversePlayer
 from ..models.policy.relax import controls_from_heads
+from ..repr.state import AudioBuffer
 from .reward import RewardWeights, jitter_penalty, multiscale_stft_loss
 
 # One reward example: features (T, dim), ground-truth registers (T, 16), and the chip clock/rate.
@@ -118,6 +121,23 @@ def _lr_at(step: int, base_lr: float, max_steps: int, warmup: int) -> float:
     return 0.5 * base_lr * (1.0 + math.cos(math.pi * min(1.0, prog)))
 
 
+def _augmented_input(
+    target_audio: torch.Tensor,
+    run: RunConfig,
+    rng: np.random.Generator,
+    strength: float,
+) -> np.ndarray:
+    """Degrade the clean reference render to a SUNO-like clip and re-extract numpy log-mel.
+
+    Mirrors the inference front-end exactly (same ``features.extract``), so the encoder trains on the
+    feature distribution it will actually meet at deployment — just coloured to bridge the domain gap.
+    """
+    pcm = target_audio.detach().to("cpu").numpy()
+    aug = augment_audio(pcm, run.sample_rate, rng, strength=strength)
+    audio = AudioBuffer(pcm=aug, sample_rate=run.sample_rate, duration_s=len(aug) / float(run.sample_rate))
+    return features.extract(audio, run).feats                            # (T, dim) float32
+
+
 def reward_forward(
     net: ReversePlayer,
     emulator: DiffAyEmulator,
@@ -126,12 +146,21 @@ def reward_forward(
     device: str,
     weights: RewardWeights,
     tau: float,
+    run: RunConfig | None = None,
+    augment: bool = False,
+    aug_strength: float = 1.0,
+    rng: np.random.Generator | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """Analysis-by-synthesis forward pass over a (cropped) batch → ``(total_loss, parts)``.
 
     Each tune is rendered independently (clock/rate vary per tune); reconstructions are stacked to a
     common length for the batched spectral term, while the jitter term is averaged over the per-tune
     relaxed controls (both differentiable through the rendered audio).
+
+    When ``augment`` is set (design A.5), the encoder input is not the cached clean features but a
+    SUNO-style degraded re-render of the *same* reference audio (``_augmented_input``); the reward
+    target stays the clean reference, so the encoder learns to recover the AY controls despite
+    real-world coloration. Requires ``run`` and ``rng``.
     """
     net.train()
     recon_list: list[torch.Tensor] = []
@@ -139,12 +168,15 @@ def reward_forward(
     jitter = torch.zeros((), device=device)
 
     for feats, regs, mclk, fr in samples:
+        with torch.no_grad():
+            target = emulator.render(unpack_regs(regs).to(device), mclk, fr)
+        if augment:
+            assert run is not None and rng is not None, "augment mode needs run + rng"
+            feats = _augmented_input(target, run, rng, aug_strength)
         x = torch.from_numpy(np.ascontiguousarray(feats.T)).unsqueeze(0).to(device)  # (1, dim, T)
         heads = net(x)
         controls = controls_from_heads(heads, float(mclk), tau=tau)
         recon = emulator.render(controls.select(0), mclk, fr)            # (N,) differentiable
-        with torch.no_grad():
-            target = emulator.render(unpack_regs(regs).to(device), mclk, fr)
         recon_list.append(recon)
         target_list.append(target)
         jitter = jitter + jitter_penalty(controls)
@@ -176,6 +208,8 @@ def train_reward(
     window: int | None = 256,
     weights: RewardWeights | None = None,
     tau: float = 1.0,
+    augment: bool = False,
+    aug_strength: float = 1.0,
     max_partials: int = 24,
     oversample: int = 2,
     log_every: int = 25,
@@ -214,6 +248,7 @@ def train_reward(
         f"| window {window or 'full'} | {train_cfg.max_steps} steps "
         f"| lr {base_lr:.1e} (warmup {warmup}, cosine) "
         f"| w_spec {weights.spectral:.2f} w_jit {weights.jitter:.3f} tau {tau:.2f} "
+        f"| augment {'on s=' + format(aug_strength, '.2f') if augment else 'off'} "
         f"| emu sr {run.sample_rate} x{oversample}, partials {max_partials}",
         flush=True,
     )
@@ -227,7 +262,8 @@ def train_reward(
         idx = rng.choice(len(samples), size=bs, replace=len(samples) < bs)
         batch = [_crop(samples[i], window, rng) for i in idx]
         total, parts = reward_forward(net, emulator, batch, device=device,
-                                      weights=weights, tau=tau)
+                                      weights=weights, tau=tau, run=run,
+                                      augment=augment, aug_strength=aug_strength, rng=rng)
         opt.zero_grad(set_to_none=True)
         total.backward()
         opt.step()

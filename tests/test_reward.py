@@ -250,3 +250,37 @@ def test_overfit_one_track():
         final = _step()
 
     assert final < 0.1 * initial, f"reconstruction loss did not fall: {initial:.4f} → {final:.4f}"
+
+
+# --------------------------------------------------------------------------------------------- #
+# A5 — augmented (domain-gap) reward forward pass
+# --------------------------------------------------------------------------------------------- #
+
+def test_reward_forward_augment_runs_and_backprops():
+    """A5 augment mode: input = SUNO-degraded re-render of the reference, reward vs the clean target.
+
+    The whole loop must still be differentiable end to end (grads reach the net) even though the
+    encoder input is now re-extracted from coloured audio rather than the cached clean features.
+    """
+    from audio2ay4.config import RunConfig
+    from audio2ay4.train.reward_train import reward_forward
+
+    run = RunConfig(sample_rate=SR, frame_rate_hz=FRATE, feat_kind="mel", use_gpu=False)
+    emu = _fast_emulator()
+    regs = _tone_regs(tp=300, level=15, n_frames=24)
+    feats = np.zeros((regs.shape[0], 80), np.float32)        # unused in augment mode (replaced)
+    sample = (feats, regs, MCLK, FRATE)
+
+    net = ReversePlayer(in_dim=80, hidden=32)
+    total, parts = reward_forward(
+        net, emu, [sample], device="cpu", weights=RewardWeights(), tau=1.0,
+        run=run, augment=True, aug_strength=1.0, rng=np.random.default_rng(0),
+    )
+
+    assert torch.isfinite(total)
+    assert total.requires_grad
+    assert "spectral" in parts and "jitter" in parts
+    total.backward()
+    grads = [p.grad for p in net.parameters() if p.grad is not None]
+    assert grads, "no gradients reached the network"
+    assert any(torch.any(g != 0) for g in grads), "all gradients were zero"

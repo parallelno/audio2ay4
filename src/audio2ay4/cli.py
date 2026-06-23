@@ -150,6 +150,8 @@ def _train_reward(args: argparse.Namespace, ym_paths: list[str]) -> int:
         window=(args.window or None),
         weights=weights,
         tau=args.tau,
+        augment=args.augment,
+        aug_strength=args.augment_strength,
     )
     print(f"Checkpoint: {ckpt}")
     return 0
@@ -207,6 +209,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="[reward] control jitter (stability) penalty weight")
     t.add_argument("--tau", type=float, default=1.0,
                    help="[reward] soft-argmax temperature for the head relaxation")
+    t.add_argument("--augment", action="store_true",
+                   help="[reward] A5: train on SUNO-style degraded input audio (domain-gap bridge)")
+    t.add_argument("--augment-strength", type=float, default=1.0,
+                   help="[reward] augmentation intensity in [0,1] (only with --augment)")
     _add_common(t)
     t.set_defaults(func=_cmd_train)
 
