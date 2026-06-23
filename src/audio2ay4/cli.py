@@ -80,12 +80,14 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     if not results:
         print(f"No audio files found at {args.input}.", file=sys.stderr)
         return 1
-    print(f"{'track':<32} {'spec_dist':>10} {'stability':>10} {'legal':>6} {'frames':>8}")
+    print(f"{'track':<32} {'spec_dist':>10} {'chroma':>8} {'onset':>8} {'stability':>10} {'legal':>6} {'frames':>8}")
     for r in results:
-        print(f"{r.name[:32]:<32} {r.spectral_distance:>10.4f} {r.stability:>10.4f} "
+        print(f"{r.name[:32]:<32} {r.spectral_distance:>10.4f} {r.chroma_sim:>8.4f} "
+              f"{r.onset_sim:>8.4f} {r.stability:>10.4f} "
               f"{('yes' if r.legal else 'NO'):>6} {r.n_frames:>8}")
     agg = aggregate(results)
     print(f"\nmean over {int(agg['count'])}: spec_dist={agg['spectral_distance']:.4f} "
+          f"chroma={agg['chroma_sim']:.4f} onset={agg['onset_sim']:.4f} "
           f"stability={agg['stability']:.4f} legality_rate={agg['legality_rate']:.3f}")
     return 0 if agg["legality_rate"] >= 1.0 else 1
 

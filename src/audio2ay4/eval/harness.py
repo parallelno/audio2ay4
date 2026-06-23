@@ -9,7 +9,7 @@ from .. import chip, features, io
 from ..config import RunConfig
 from ..models import get_core
 from ..repr import compile_state
-from .metrics import spectral_distance, stability
+from .metrics import chroma_similarity, onset_similarity, spectral_distance, stability
 
 _AUDIO_EXTS = (".wav", ".mp3", ".flac", ".ogg", ".aiff", ".aif")
 
@@ -20,6 +20,8 @@ class EvalResult:
 
     name: str
     spectral_distance: float
+    chroma_sim: float
+    onset_sim: float
     stability: float
     legal: bool
     n_frames: int
@@ -35,6 +37,8 @@ def evaluate_audio(in_path: str, cfg: RunConfig) -> EvalResult:
     return EvalResult(
         name=os.path.basename(in_path),
         spectral_distance=spectral_distance(audio.pcm, rendered),
+        chroma_sim=chroma_similarity(audio.pcm, rendered, cfg.sample_rate),
+        onset_sim=onset_similarity(audio.pcm, rendered, cfg.sample_rate),
         stability=stability(song.regs),
         legal=bool(chip.is_legal(song.regs)),
         n_frames=song.n_frames,
@@ -57,11 +61,14 @@ def evaluate_path(path: str, cfg: RunConfig) -> list[EvalResult]:
 def aggregate(results: list[EvalResult]) -> dict[str, float]:
     """Summarise a batch of results into mean metrics + the legality pass-rate."""
     if not results:
-        return {"count": 0.0, "spectral_distance": 0.0, "stability": 0.0, "legality_rate": 1.0}
+        return {"count": 0.0, "spectral_distance": 0.0, "chroma_sim": 0.0,
+                "onset_sim": 0.0, "stability": 0.0, "legality_rate": 1.0}
     n = len(results)
     return {
         "count": float(n),
         "spectral_distance": sum(r.spectral_distance for r in results) / n,
+        "chroma_sim": sum(r.chroma_sim for r in results) / n,
+        "onset_sim": sum(r.onset_sim for r in results) / n,
         "stability": sum(r.stability for r in results) / n,
         "legality_rate": sum(1.0 for r in results if r.legal) / n,
     }

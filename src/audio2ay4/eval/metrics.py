@@ -40,6 +40,99 @@ def spectral_distance(a: NDArray, b: NDArray, ffts: tuple[int, ...] = _DEFAULT_F
     return total / len(ffts)
 
 
+_A4_HZ = 440.0
+
+
+def _stft_mag(x: NDArray[np.float64], n_fft: int, hop: int) -> NDArray[np.float64]:
+    """Linear-magnitude STFT, frames along axis 0, rfft bins along axis 1."""
+    if len(x) < n_fft:
+        x = np.pad(x, (0, n_fft - len(x)))
+    win = np.hanning(n_fft)
+    frames = np.lib.stride_tricks.sliding_window_view(x, n_fft)[::hop]
+    return np.abs(np.fft.rfft(frames * win, axis=1))
+
+
+def _chroma_filterbank(
+    n_fft: int, sr: int, fmin: float, fmax: float
+) -> NDArray[np.float64]:
+    """(12, n_bins) matrix folding each in-range rfft bin onto its pitch class."""
+    freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
+    fb = np.zeros((12, freqs.shape[0]), dtype=np.float64)
+    for i, f in enumerate(freqs):
+        if f < fmin or f > fmax:
+            continue
+        midi = 69.0 + 12.0 * np.log2(f / _A4_HZ)
+        pc = int(np.round(midi)) % 12
+        fb[pc, i] = 1.0
+    return fb
+
+
+def chroma_similarity(
+    a: NDArray,
+    b: NDArray,
+    sr: int,
+    *,
+    n_fft: int = 4096,
+    hop: int = 1024,
+    fmin: float = 65.0,
+    fmax: float = 2093.0,
+) -> float:
+    """Mean per-frame cosine of chroma (pitch-class) vectors in [0, 1] (HIGHER = better).
+
+    Timbre-invariant: folds spectral energy onto the 12 pitch classes, so it rewards playing the
+    *right notes/harmony* regardless of the chip's very different timbre. Frames silent in either
+    signal are ignored.
+    """
+    xa, xb = _as_mono(a), _as_mono(b)
+    n = min(len(xa), len(xb))
+    if n < n_fft:
+        return 0.0
+    xa, xb = xa[:n], xb[:n]
+    fb = _chroma_filterbank(n_fft, sr, fmin, fmax)
+    ca = _stft_mag(xa, n_fft, hop) @ fb.T
+    cb = _stft_mag(xb, n_fft, hop) @ fb.T
+    m = min(ca.shape[0], cb.shape[0])
+    if m == 0:
+        return 0.0
+    ca, cb = ca[:m], cb[:m]
+    na = np.linalg.norm(ca, axis=1)
+    nb = np.linalg.norm(cb, axis=1)
+    valid = (na > 1e-6) & (nb > 1e-6)
+    if not valid.any():
+        return 0.0
+    cos = np.sum(ca[valid] * cb[valid], axis=1) / (na[valid] * nb[valid])
+    return float(np.mean(cos))
+
+
+def onset_similarity(
+    a: NDArray, b: NDArray, sr: int, *, n_fft: int = 2048, hop: int = 512
+) -> float:
+    """Pearson correlation of spectral-flux onset envelopes in [-1, 1] (HIGHER = better).
+
+    Captures rhythm/timing adherence (e.g. whether the noise channel's drums land with the
+    original), independent of timbre and loudness.
+    """
+    xa, xb = _as_mono(a), _as_mono(b)
+    n = min(len(xa), len(xb))
+    if n < 2 * n_fft:
+        return 0.0
+
+    def _onset_env(x: NDArray[np.float64]) -> NDArray[np.float64]:
+        mag = _stft_mag(x, n_fft, hop)
+        flux = np.maximum(np.diff(mag, axis=0), 0.0).sum(axis=1)
+        return flux
+
+    ea, eb = _onset_env(xa[:n]), _onset_env(xb[:n])
+    m = min(ea.shape[0], eb.shape[0])
+    if m < 2:
+        return 0.0
+    ea, eb = ea[:m] - ea[:m].mean(), eb[:m] - eb[:m].mean()
+    da, db = float(np.linalg.norm(ea)), float(np.linalg.norm(eb))
+    if da < 1e-9 or db < 1e-9:
+        return 0.0
+    return float(np.dot(ea, eb) / (da * db))
+
+
 def stability(regs: NDArray[np.uint8]) -> float:
     """Frame-to-frame change rate in [0, 1] (lower = steadier; flags period/volume thrash)."""
     r = np.asarray(regs)
