@@ -19,6 +19,8 @@ from .config import DEFAULT_FRAME_RATE_HZ, DEFAULT_MASTER_CLOCK_HZ, RunConfig
 
 def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--core", default="dummy", help="learned core name (default: dummy)")
+    p.add_argument("--feat-kind", default="mel", choices=["mel", "cqt"],
+                   help="audio feature front-end (must match the checkpoint's training features)")
     p.add_argument("--clock", type=int, default=DEFAULT_MASTER_CLOCK_HZ, help="AY master clock (Hz)")
     p.add_argument("--frame-rate", type=int, default=DEFAULT_FRAME_RATE_HZ, help="frames per second")
     p.add_argument("--sample-rate", type=int, default=44_100, help="audio sample rate (Hz)")
@@ -36,6 +38,7 @@ def _cfg(args: argparse.Namespace) -> RunConfig:
         extra["hidden"] = args.hidden
     return RunConfig(
         core=args.core,
+        feat_kind=getattr(args, "feat_kind", "mel"),
         master_clock_hz=args.clock,
         frame_rate_hz=args.frame_rate,
         sample_rate=args.sample_rate,

@@ -8,6 +8,18 @@ shared :class:`FeatureFrames` contract, aligned 1:1 with the AY frame grid that 
 
 from __future__ import annotations
 
-from .mel import extract, mel_center_freqs
+from ..config import RunConfig
+from ..repr.state import AudioBuffer, FeatureFrames
+from .mel import extract as _extract_mel
+from .mel import mel_center_freqs
+
+
+def extract(audio: AudioBuffer, cfg: RunConfig) -> FeatureFrames:
+    """Audio → frame-aligned features, dispatched on ``cfg.feat_kind`` ("mel" | "cqt")."""
+    if cfg.feat_kind == "cqt":
+        from .cqt import extract as _extract_cqt
+        return _extract_cqt(audio, cfg)
+    return _extract_mel(audio, cfg)
+
 
 __all__ = ["extract", "mel_center_freqs"]
