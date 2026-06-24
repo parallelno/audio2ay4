@@ -4,6 +4,14 @@
 > the git checkout. On the new machine, paste this back into repo memory (see
 > [README.md](README.md) in this folder) so the assistant resumes with full context.
 
+## ✅ FINAL (2026-06): `checkpoints/warmstart_rl_v7.pt` is the shipped model — exploration stopped here
+- v7 warm-start = **chroma ~0.85 / onset ~0.68** on `samples/long`. Best melody-preserving model found.
+- Every fine-tuning / feature lever tried was tested and FAILED to beat it: reward regimes
+  v1/v3/v8/v9 (all regressed chroma) and CQT features v10 (flat-to-worse). v7 is the practical ceiling
+  for this approach. To use: `--core rl --checkpoint checkpoints/warmstart_rl_v7.pt` (mel features, default).
+- If picked up again, only untried supervised Tier-2 nudges remain (cleaner corpus pairing, more pitch
+  bins). Reward fine-tuning and CQT are ruled out — see roadmap section.
+
 ## What it is
 Audio (mp3/wav/...) → AY-3-8910/YM2149 register stream (.ym) + audio preview.
 
@@ -310,15 +318,21 @@ Audio (mp3/wav/...) → AY-3-8910/YM2149 register stream (.ym) + audio preview.
 - REGISTER ANALYSIS of `PixelQuest_v7.ym` (R7 mixer / R8–10 vol / env bits): channels **A & C = melody** (tone-on 92/93%, mean vol ~10), **B = percussion** (tone-on 22%, noise-on 19%, vol 3.6). Noise is correctly isolated to B — **not** the harshness source. **THE SMOKING GUN: hardware envelope generator used 0% on ALL channels** ⇒ every note is a flat-volume square wave with no attack/decay shaping ⇒ static buzz / harshness. Two always-on tone channels at high volume compound the density.
 - DIAGNOSIS: v7's "high noise / buzzy" character is **timbre**, not the noise channel — flat square waves + zero envelope. The intermittent "breaks apart" is pitch-tracking failing on dense polyphony (wrong tone periods). ⇒ TWO distinct levers: **(a) make the model USE the envelope generator** (amplitude shaping → softer, less buzzy); **(b) CQT features** for the pitch breakups. RESOLVED the open question: corpus env usage = **5.8% of frames / only 6 of 40 tunes** (scanned random 40). So env is a real-but-MINORITY feature; v7's 0% is the head collapsing on a rare positive class (always-off minimizes supervised loss). Un-collapsing it needs class-weighting on the env-use head, and the payoff is uncertain since even the corpus uses it sparingly. ⇒ **CQT (b) is the higher-value lever**: it attacks BOTH complaints at once (cleaner pitch → fewer wrong-note "break-aparts" AND higher chroma), is supervised (no reg-prone reward regime), and is already the Tier-1 top pick. Envelope (a) is a smaller, secondary, more speculative win.
 
-## NOT yet done (next options) — REPRIORITIZED after v1/v3/v8 + v9 real-audio all regressed vs v7
-- **Reality check:** every reward-fine-tuning lever now regresses chroma vs v7 — A4 spectral v1, A5 augment v3, A.4-w3 self-recon chroma v8, AND **A5 real-audio-target chroma v9** (the one that fixed the distribution mismatch). The dead end is broader than the mismatch: chroma/onset reward through the diff twin inherently trades pitch for rhythm. **Stop reward fine-tuning for melody entirely.** v7 warm-start (chroma ~0.83–0.85 / onset ~0.68) stays the keeper. The melody gain must come from the SUPERVISED side.
+## NOT yet done (next options) — REPRIORITIZED after v1/v3/v8/v9 + CQT v10 all failed to beat v7
+- **Reality check:** every reward-fine-tuning lever regresses chroma vs v7 — A4 spectral v1, A5 augment v3, A.4-w3 self-recon chroma v8, AND **A5 real-audio-target chroma v9**. The dead end is broader than the mismatch: chroma/onset reward through the diff twin inherently trades pitch for rhythm. **Stop reward fine-tuning for melody entirely.** AND the top supervised lever (**CQT features, v10**) is now ALSO tested → NO-GO (chroma flat −0.011, onset −0.143). v7 warm-start (chroma ~0.85 / onset ~0.68) stays the keeper.
 
-### TIER 1 — most promising (supervised; reward fine-tuning is now ruled out for melody)
-- **CQT (or higher-resolution) features — THE TOP (and now sole) live lever.** Chroma *is* pitch-class; mel's poor low-frequency resolution is the likely ceiling on v7's pitch. This improves the SUPERVISED v7 mapping directly on the audio→register task (no reward regime involved). Changes `data/pairing` `cfg_key` → FULL re-render (~3 min on 32 workers, cache rebuilds). Success = eval **chroma climbs above 0.848** toward audio2ay3's 0.900. Was already flagged at A2 as "switch feat_kind to CQT for pitch CE<1".
-- ~~Real-audio analysis-by-synthesis~~ — **TESTED → NO-GO (v9, see section above).** The reframing was built (`train/real_train.py`, `--regime real`) and run on 44 SUNO clips: held-out chroma still REGRESSED (Δ −0.077). The chroma/onset twin-reward code is sound and reusable, but the regime degrades melody regardless of target. Do not pursue further for chroma.
+### ⛔ CQT FEATURES (v10) — BUILT + TESTED → NO-GO
+- Built numpy pseudo-CQT (`features/cqt.py`: log-freq semitone filterbank, fmin C1 32.7Hz, 12 bins/oct × 7 oct = **84 bins**, n_fft 8192), `features.extract` dispatch on `cfg.feat_kind`, `--feat-kind {mel,cqt}` CLI flag (plumbed via `_cfg` into RunConfig → cache `cfg_key`). 3 tests, 83 pass, ruff clean.
+- Ran v7 recipe EXACTLY (50k steps, batch16, lr3e-4, window512, reg OFF), only change = `--feat-kind cqt` (full corpus re-render, 4942 ok). → `checkpoints/warmstart_cqt_v10.pt`.
+- Training: pitch CE plateaued **~1.4 (HIGHER/worse than v7's ~0.97)**, val ~7.5. Eval `samples/long` head-to-head: **v7 mel chroma 0.8479 / onset 0.6783** vs **v10 cqt chroma 0.8368 / onset 0.5352** → WORSE on EVERY metric (spec_dist & stability too).
+- WHY: the 8192-pt FFT buys pitch-axis resolution but costs TIME resolution → hurts onset/rhythm; the net already extracted pitch fine from mel. Hypothesis (CQT lifts chroma) FALSE. Code kept (harmless, default mel). Don't retry CQT without a fundamentally different time/freq tradeoff (e.g. multi-resolution, shorter hop).
 
-### TIER 2 — incremental supervised improvements (safe, no regime change)
-- More pitch bins / wider pitch range / cleaner corpus pairing / longer warm-start training. Low-risk nudges to v7; won't close a 0.05 chroma gap alone but compound with CQT.
+### TIER 1 — (no clear live supervised lever remains; v7 is at the practical ceiling)
+- ~~CQT / higher-resolution features~~ — **TESTED → NO-GO (v10, see section above).** Flat-to-worse chroma, worse rhythm.
+- ~~Real-audio analysis-by-synthesis~~ — **TESTED → NO-GO (v9, see section above).** Held-out chroma regressed (Δ −0.077). Twin-reward code sound + reusable, but regime degrades melody regardless of target.
+
+### TIER 2 — incremental supervised improvements (safe, no regime change) — now the best remaining ideas
+- More pitch bins / wider pitch range / cleaner corpus pairing / longer warm-start training. Low-risk nudges to v7; each won't close a 0.05 chroma gap alone. With CQT ruled out, these (esp. cleaner corpus pairing + more pitch bins) are the highest-value untried supervised levers.
 
 ### TIER 3 — parked (reward-regime knobs; low value until the regime is fixed)
 - Augment-strength sweep (0.3–0.4) / init-from-v1; CLAP-style embedding (w2, heavy external encoder); idiomatic (A.6); compile-cost (λ_leg); PPO (A6). All operate inside the now-discredited reward regime → expected to keep regressing chroma. Effectively parked indefinitely for melody; only revisit if a future idea decouples them from the twin-reward signature.
