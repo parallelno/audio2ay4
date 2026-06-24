@@ -103,6 +103,9 @@ def _cmd_train(args: argparse.Namespace) -> int:
     from .config import TrainConfig
     from .data.corpus import find_ym_files
 
+    if args.regime == "real":
+        return _train_real(args)
+
     ym_paths = find_ym_files(args.corpus)
     if not ym_paths:
         print(f"No .ym files found under {args.corpus}.", file=sys.stderr)
@@ -160,6 +163,47 @@ def _train_reward(args: argparse.Namespace, ym_paths: list[str]) -> int:
     return 0
 
 
+def _train_real(args: argparse.Namespace) -> int:
+    """Regime A5 — real-audio analysis-by-synthesis on SUNO clips (design A.5)."""
+    from .config import TrainConfig
+    from .train.real_train import find_audio_files, train_real
+    from .train.reward import RewardWeights
+
+    corpus = args.corpus if args.corpus != "corpus/ym" else "corpus/suno"
+    audio_paths = find_audio_files(corpus)
+    if not audio_paths:
+        print(f"No audio files found under {corpus}.", file=sys.stderr)
+        return 1
+    if args.limit > 0:
+        audio_paths = audio_paths[: args.limit]
+
+    run = _cfg(args)
+    run = replace(run, core="rl", extra={
+        **run.extra, **({"checkpoint": args.out} if args.out else {})
+    })
+    train_cfg = TrainConfig(
+        plan="rl", run=run, batch_size=args.batch_size, lr=args.lr,
+        max_steps=args.max_steps, corpus_dir=corpus, cache_dir=args.cache_dir,
+    )
+    # Real-regime sane default: timbre-invariant chroma+onset only (spectral magnitude is
+    # perceptually invalid against a rich SUNO synth). Used unless the caller sets chroma/onset.
+    if args.w_chroma == 0.0 and args.w_onset == 0.0:
+        weights = RewardWeights(spectral=0.0, jitter=args.w_jitter, chroma=5.0, onset=1.0)
+    else:
+        weights = RewardWeights(spectral=args.w_spec, jitter=args.w_jitter,
+                                chroma=args.w_chroma, onset=args.w_onset)
+    ckpt = train_real(
+        train_cfg, audio_paths,
+        init_checkpoint=(args.init or None),
+        window=(args.window or None),
+        weights=weights,
+        tau=args.tau,
+        heldout_frac=args.heldout_frac,
+    )
+    print(f"Checkpoint: {ckpt}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="audio2ay4", description="Audio → AY (YM) converter & preview.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -182,8 +226,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     t = sub.add_parser("train", help="train a learned core (Plan A warm-start / reward)")
     t.add_argument("plan", nargs="?", default="rl", choices=["rl", "diffusion"], help="which plan")
-    t.add_argument("--regime", default="warmstart", choices=["warmstart", "reward"],
-                   help="warmstart = supervised A2; reward = Regime-1 analysis-by-synthesis (A4)")
+    t.add_argument("--regime", default="warmstart", choices=["warmstart", "reward", "real"],
+                   help="warmstart = supervised A2; reward = self-recon A4; "
+                        "real = real-audio analysis-by-synthesis on SUNO clips (A5)")
     t.add_argument("--corpus", default="corpus/ym", help="directory of .ym training tunes")
     t.add_argument("--out", default="", help="checkpoint output path (default: <cache>/warmstart_rl.pt)")
     t.add_argument("--cache-dir", default=".cache", help="feature/pair cache directory")
@@ -220,6 +265,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="[reward] A5: train on SUNO-style degraded input audio (domain-gap bridge)")
     t.add_argument("--augment-strength", type=float, default=1.0,
                    help="[reward] augmentation intensity in [0,1] (only with --augment)")
+    t.add_argument("--heldout-frac", type=float, default=0.3,
+                   help="[real] fraction of clips (by prompt stem) held out for the go/no-go eval")
     _add_common(t)
     t.set_defaults(func=_cmd_train)
 

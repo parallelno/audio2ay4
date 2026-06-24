@@ -1,0 +1,17 @@
+eval samples/long --core rl --checkpoint checkpoints/reward_rl_v8_chroma.pt
+(reward_rl_v8_chroma: from v7, 2000 steps, w_spec 0.2 w_chroma 5.0 w_onset 1.0 w_jit 0)
+
+track                             spec_dist   chroma    onset  stability  legal   frames
+8-BitNostalgia.mp3                   0.2144   0.7755   0.7305     0.5655    yes    12324
+Dungeon_Ore.mp3                      0.3336   0.8189   0.6468     0.5046    yes     5106
+Goblins_Lair.mp3                     0.2200   0.7784   0.7446     0.5791    yes     2992
+Pixel_Hearthbeat.mp3                 0.3283   0.8368   0.5781     0.5159    yes     4678
+The_Dragons_Lair.mp3                 0.3103   0.8205   0.6659     0.5762    yes     6868
+The_Forgotten_Sanctum.mp3            0.1813   0.7218   0.6340     0.3311    yes     7204
+The_Last_Pixel.mp3                   0.2517   0.7569   0.7168     0.5327    yes     3936
+
+mean over 7: spec_dist=0.2628 chroma=0.7870 onset=0.6738 stability=0.5150 legality_rate=1.000
+
+VERDICT: REGRESSION vs v7 warm-start (chroma 0.848 -> 0.787). Same drift as v1/v3.
+Reward regime (corpus YM self-reconstruction) is mismatched to eval (real SUNO mp3).
+v7 remains the keeper.
